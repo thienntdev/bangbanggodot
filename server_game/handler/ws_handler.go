@@ -1095,4 +1095,22 @@ func (c *WSConn) startBattle(room *game.Room) {
 	// For each member, send:
 	// 1. NotifySelfData (1550) - their tank info
 	// 2. NotifyOtherList (1551) - other players' tanks
-	// 3. Noti
+	// 3. NotifyBattleEnter (1586) - battle start signal (triggers client.battle.started = true)
+	for _, selfTank := range tanks {
+		var others []*protocol.TankBattleInfo
+		for _, other := range tanks {
+			if other.ObjID != selfTank.ObjID {
+				others = append(others, other)
+			}
+		}
+
+		selfFrame := protocol.EncodeNotifySelfData(selfTank)
+		otherFrame := protocol.EncodeNotifyOtherList(others)
+		enterFrame := protocol.EncodeNotifyBattleEnter(now, 0)
+
+		c.broadcast.SendTo(selfTank.ObjID, selfFrame)
+		c.broadcast.SendTo(selfTank.ObjID, otherFrame)
+		c.broadcast.SendTo(selfTank.ObjID, enterFrame)
+		log.Printf("[battle] sent 1550, 1551, 1586 to player %d (%s, camp=%d)", selfTank.ObjID, selfTank.Name, selfTank.Camp)
+	}
+}

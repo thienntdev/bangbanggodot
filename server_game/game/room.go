@@ -373,4 +373,40 @@ func (m *RoomManager) GetMemberSkills(roomID uint32, charID uint32) [4]uint32 {
 }
 
 // FindRoomByMember finds the room that contains charID.
-func (m *Ro
+func (m *RoomManager) FindRoomByMember(charID uint32) *Room {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, r := range m.rooms {
+		for _, mid := range r.Members {
+			if mid == charID {
+				return r
+			}
+		}
+	}
+	return nil
+}
+
+// RemoveMember removes a char from their room and deletes the room if empty.
+// Returns the room ID they were in, or 0.
+func (m *RoomManager) RemoveMember(charID uint32) uint32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.rooms {
+		for i, mid := range r.Members {
+			if mid == charID {
+				r.Members = append(r.Members[:i], r.Members[i+1:]...)
+				delete(r.MemberBriefs, charID)
+				delete(r.MemberCamps, charID)
+				delete(r.MemberReady, charID)
+				delete(r.MemberPositions, charID)
+				delete(r.LoadedMembers, charID)
+				rid := r.ID
+				if len(r.Members) == 0 {
+					delete(m.rooms, rid)
+				}
+				return rid
+			}
+		}
+	}
+	return 0
+}

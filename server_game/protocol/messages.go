@@ -881,4 +881,13 @@ func EncodeSyncSceneFire(bulletID, shooterID uint32, startX, startY, destX, dest
 
 	// 3..10: empty vectors
 	w.PutU16(0) // m_skillVec
-	w.PutU16(0) /
+	w.PutU16(0) // m_hpVec
+	w.PutU16(0) // m_deadVec
+	w.PutU16(0) // m_mpVec
+	w.PutU16(0) // m_blowUpVec
+	w.PutU16(0) // m_delVec
+	w.PutU16(0) // m_overVec
+	w.PutU16(0) // m_shieldVec
+
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
