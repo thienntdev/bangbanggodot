@@ -1,0 +1,23 @@
+# Generated local files; the bundled main database is intentionally included.
+/data/admin_buff.key
+/data/certs/
+/data/packet_log/
+/data/*.sqlite3-wal
+/data/*.sqlite3-shm
+/data/*.sqlite3-journal
+/runtime/state/
+*.log
+*.pid
+__pycache__/
+*.pyc
+.work/
+.dist/
+# Development material is not part of this player distribution.
+/docs/
+/tests/
+/tools/
+/flash/
+/AGENTS.md
+/protocol_*.json
+/data/*test*.sqlite3
+**/provenance/

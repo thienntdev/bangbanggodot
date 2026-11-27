@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Thiết lập trận bot · Bang Bang</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#101f28;color:#e5eef4;font:16px 'Segoe UI',Arial,sans-serif}
+    main{max-width:920px;margin:36px auto;padding:24px}h1{margin:0 0 12px;font-size:28px}p{color:#acc2ce;line-height:1.5}
+    label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:16px 0}
+    select,button{font:inherit;padding:9px 12px;border:1px solid #426272;border-radius:8px;background:#18333f;color:#fff}
+    select:focus,button:focus{outline:2px solid #ffc95f;outline-offset:3px}.teams{display:flex;gap:20px;margin:24px 0}.team{flex:1;border:1px solid #36525f;border-radius:12px;padding:20px;background:#162c37}
+    h2{font-size:19px;margin:0 0 18px}.team.enemy{border-top:3px solid #df8277}.team.ally{border-top:3px solid #68bfe0}
+    .human{padding:12px;background:#203d4a;border-radius:8px;font-size:14px}.save{background:#ffc95f;color:#172832;font-weight:700;border:0;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
+    #status{min-height:24px;color:#ffe09a}small{display:block;margin-top:18px;color:#acc2ce;line-height:1.6}a{color:#81d0ed}
+    @media(max-width:640px){main{margin:12px auto;padding:16px}.teams{display:block}.team{margin-bottom:16px}h1{font-size:24px}}
+  </style>
+</head>
+<body><main>
+  <h1>Thiết lập trận bot</h1>
+  <p>Chọn đội hình và cấp tank cho trận kế tiếp. Trận đang chơi giữ nguyên đội hình.</p>
+  <form id="setup">
+    <label>Chế độ <select id="mode"><option value="escort_bomb">Hộ tống xe bom — về đích / 15 phút</option><option value="death_city">Sinh Tử · Thành Tận Thế — thắng 2 vòng / 150 giây mỗi vòng</option><option value="death_mine">Sinh Tử · Mỏ Khoáng Sụp Đổ — thắng 2 vòng / 150 giây mỗi vòng</option><option value="base_polar">Phá nhà · Địa Cực Dota — 15 phút</option><option value="base_ruins">Phá nhà · Di Tích Maya — 15 phút</option><option value="base_mineral">Phá nhà · Tranh Đoạt Tinh Khoáng — 15 phút</option><option value="base_town">Phá nhà · Thị Trấn Ánh Dương — 15 phút</option><option value="pk_robo">PK · Robo — 25 điểm / 4 phút</option><option value="pk_cow">PK · Dắt bò — 25 điểm / 4 phút</option><option value="pk_totem">PK · Vật Tổ — 25 điểm / 3 phút 30 giây</option><option value="pk_maya">PK · Lời Tiên Tri Maya — 25 điểm / 4 phút</option><option value="pk_mine">PK · Khu Mỏ Phóng Xạ — 25 điểm / 4 phút</option><option value="pk_fortress">PK · Pháo Đài Không Gian — 25 điểm / 4 phút</option><option value="pk_polar">PK · Tiền Đồn Cực Địa — 25 điểm / 3 phút 30 giây</option><option value="pk_lightning">PK · Điện Chớp Sấm Rền — 25 điểm / 4 phút</option><option value="pk_fastfood">PK · Quán Ăn Vui Vẻ — 25 điểm / 4 phút</option><option value="pk_snow">PK · Băng Thiên Tuyết Địa — 25 điểm / 4 phút</option><option value="occupy_desert">Chiếm cờ · Việt Dã — 1.000 điểm / 10 phút</option><option value="occupy_tomb">Chiếm cờ · Cổ Mộ — 3 cờ / 1.000 điểm / 10 phút</option><option value="occupy_freight">Chiếm cờ · Trung Tâm Vận Chuyển — 3 cờ / 1.000 điểm / 10 phút</option><option value="occupy_military">Chiếm cờ · Quân Khu Tử Thần — 1.000 điểm / 10 phút</option><option value="occupy_quicksand">Chiếm cờ · Vùng Cát Lún — 3 cờ / 1.000 điểm / 10 phút</option><option value="test_desert">Phòng test tank — Việt Dã</option><option value="test">Phòng thử tank cũ</option></select></label>
+    <p id="testDesert" hidden>Phòng test riêng: Gundam, Panda, Hulk, Songoku và Naruto phe địch, cấp 6, đứng cách nhau khoảng 180. Không tự đi/bắn/dùng chiêu, giữ nội tại và khống chế. Chết hồi đầy tại chỗ sau 5 giây. Cờ không tính điểm, phòng không tự hết giờ; thoát trận khi thử xong.</p>
+    <div class="teams" id="teams">
+      <section class="team ally"><h2>Đội của bạn</h2><div class="human">Bạn · dùng tank và cấp đã chọn trong game</div><label>Số bot đồng đội <select id="allyCount" aria-label="Số bot đồng đội"></select></label><div id="allies"></div></section>
+      <section class="team enemy"><h2>Đội đối thủ</h2><label>Số bot địch <select id="enemyCount" aria-label="Số bot địch"></select></label><div id="enemies"></div></section>
+    </div>
+    <label><span>Gợi ý trảm Quan Vũ</span><input id="quanvuHint" type="checkbox"></label>
+    <p>Khi bật, thanh máu tank địch đỏ sáng hơn nếu Quan Vũ của bạn có thể dùng Space trảm ngay: địch còn tối đa 30% HP, trong tầm và không có cơ chế cứu mạng. Áp dụng từ phòng mới.</p>
+    <p id="pool"></p><button id="save" class="save" disabled>Lưu cho trận kế tiếp</button>
+    <p id="status" role="status">Đang tải thiết lập…</p>
+    <small>Ngoài phòng test, mỗi bot chọn tank ngẫu nhiên trong nhóm AI đã mở. Cấp 1–6 là cấp tank, không đổi trí thông minh. Để áp dụng: kết thúc/rời phòng hiện tại rồi tạo hoặc vào phòng mới trong game.</small>
+  </form>
+</main>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id);},levels={allies:[],enemies:[]};
+  function options(node,min,max){for(var n=min;n<=max;n++){var o=document.createElement('option');o.value=n;o.textContent=n;node.appendChild(o);}}
+  options($('allyCount'),0,4);options($('enemyCount'),1,5);
+  function render(key,count){var root=$(key);root.textContent='';for(var i=0;i<count;i++){var row=document.createElement('label'),select=document.createElement('select');row.textContent='Bot '+(i+1)+' · cấp tank';select.setAttribute('aria-label',row.textContent+' '+(key==='allies'?'đồng đội':'địch'));options(select,1,6);select.value=levels[key][i]||5;row.appendChild(select);root.appendChild(row);}}
+  function read(key){return Array.prototype.map.call($(key).querySelectorAll('select'),function(s){return Number(s.value);});}
+  function change(key,id){levels[key]=read(key);render(key,Number($(id).value));}
+  $('allyCount').onchange=function(){change('allies','allyCount');};$('enemyCount').onchange=function(){change('enemies','enemyCount');};
+  $('mode').onchange=function(){var fixed=this.value==='test_desert';$('teams').style.display=fixed||this.value==='test'?'none':'';$('testDesert').hidden=!fixed;$('pool').hidden=fixed;};
+  function request(url,data){return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(data||{})}).then(function(r){return r.json();}).then(function(v){if(!v.success)throw Error(v.message||'Không lưu được.');return v;});}
+  request('/api/bots/get').then(function(v){levels=v.setup;$('quanvuHint').checked=v.setup.quanvu_execute_hint===true;$('mode').value=v.setup.mode;$('mode').onchange();$('allyCount').value=levels.allies.length;$('enemyCount').value=levels.enemies.length;render('allies',levels.allies.length);render('enemies',levels.enemies.length);$('pool').textContent='Nhóm tank AI: '+v.tanks.join(', ')+'.';$('status').textContent='Thiết lập đã lưu hiện tại.';$('save').disabled=false;}).catch(function(e){$('status').textContent=e.message;});
+  $('setup').onsubmit=function(e){e.preventDefault();$('save').disabled=true;request('/api/bots/save',{mode:$('mode').value,allies:read('allies'),enemies:read('enemies'),quanvu_execute_hint:$('quanvuHint').checked}).then(function(){$('status').textContent='Đã lưu. Thiết lập sẽ áp dụng khi bạn tạo hoặc vào phòng mới.';}).catch(function(e){$('status').textContent=e.message;}).then(function(){$('save').disabled=false;});};
+})();
+</script></body></html>

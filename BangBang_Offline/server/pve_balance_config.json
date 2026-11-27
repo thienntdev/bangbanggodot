@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "version": 2,
+  "name": "PvE offline M28 — HP quái x1,5, sát thương x1,2 so với M23",
+  "hp_multiplier": "2",
+  "attack_multiplier": "1",
+  "armor_multiplier": "1",
+  "penetration_multiplier": "1",
+  "enemy_hp_multiplier": "1.5",
+  "enemy_damage_multiplier": "1.2",
+  "bomb_puzzles_version": 1,
+  "npc_armor_curve": "source_iK_target_only_v1",
+  "notes": [
+    "NPC level key = role nLevelId * 100000 + MapTemplate.nQuality.",
+    "The structured-table join reproduces chapter9 normal HP884550 and hard HP1116003; the latter matches the supplied original-client screenshot.",
+    "The M23 base multipliers are retained. New M28 runs apply an additional x1.5 HP and x1.2 outgoing damage to hostile finite-health PvE NPCs only; player tanks, friendly NPC escorts, indestructible traps, static objects and environmental hazards are unchanged.",
+    "Outgoing damage is scaled once in the PvE NPC damage pipeline, including flat, percent-health, periodic and boss attacks. Attack/armor/penetration stats are not scaled a second time; already-resolved damage is not rescaled.",
+    "Recommended helper power is a design reference, not an entry gate or a multiplier based on the player's current loadout.",
+    "Hard offline reuses the normal geometry, waves and objectives, with the source hero-map quality; original hard boss-script parity is not claimed.",
+    "An existing in-progress save without pve_balance keeps legacy stats. Existing M23 profiles without enemy multipliers keep their prior stats/damage. Only new runs freeze this configuration and all five quality rows.",
+    "Bomb puzzle version1 is frozen for new runs only. Existing saves keep their prior scenery/bomb rules, so an old already-used bomb cannot strand surviving bricks behind a newly applied immunity."
+  ]
+}

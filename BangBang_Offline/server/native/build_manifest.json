@@ -1,0 +1,126 @@
+{
+  "abi_version": 1,
+  "binaries": {
+    "linux-x86_64": {
+      "built_utc": "2026-10-31T03:02:57.990852+00:00",
+      "command": [
+        "/usr/bin/g++",
+        "-O3",
+        "-std=c++17",
+        "-shared",
+        "-fno-fast-math",
+        "-ffp-contract=off",
+        "-DBB_GEOMETRY_SOURCE_SHA256=\"a43df47fb9867ca8e53a7d5e8f1a2f6eaa2a44df12bc5d8a12d4264386b9c87e\"",
+        "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/geometry.cpp",
+        "-o",
+        "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/bb-geometry-build-54n60eyd/libbb_geometry.so",
+        "-fPIC",
+        "-pthread"
+      ],
+      "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+      "filename": "libbb_geometry.so",
+      "runtime_self_test": {
+        "result": {
+          "abi_version": 1,
+          "hit": 0.25,
+          "live_handles": 0,
+          "passed": true
+        },
+        "status": "passed"
+      },
+      "sha256": "90bb3ff74b0186b8645de5d548654fa475bcbc2df748d017f795d6c25cf18179"
+    },
+    "windows-x86_64": {
+      "built_utc": "2026-10-31T03:05:40.382828+00:00",
+      "command": [
+        "/usr/bin/x86_64-w64-mingw32-g++",
+        "-O3",
+        "-std=c++17",
+        "-shared",
+        "-fno-fast-math",
+        "-ffp-contract=off",
+        "-DBB_GEOMETRY_SOURCE_SHA256=\"a43df47fb9867ca8e53a7d5e8f1a2f6eaa2a44df12bc5d8a12d4264386b9c87e\"",
+        "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/geometry.cpp",
+        "-o",
+        "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/bb-geometry-build-1ezem8j4/bb_geometry.dll",
+        "-static-libgcc",
+        "-static-libstdc++",
+        "-static"
+      ],
+      "compiler": "x86_64-w64-mingw32-g++ (GCC) 13-posix",
+      "filename": "bb_geometry.dll",
+      "runtime_self_test": {
+        "status": "not_run_cross_compile"
+      },
+      "sha256": "3036464b4929279478ba4be9abc139ffd8ec7f1c57ceab06ed2410e9ad88cfd7"
+    }
+  },
+  "checkpoint": {
+    "abi_version": 1,
+    "binaries": {
+      "linux-x86_64": {
+        "built_utc": "2026-10-31T03:09:42.348239+00:00",
+        "command": [
+          "/usr/bin/g++",
+          "-O3",
+          "-std=c++17",
+          "-shared",
+          "-fno-fast-math",
+          "-ffp-contract=off",
+          "-DBB_CHECKPOINT_SOURCE_SHA256=\"7927eb355b5fd35b743c30f49a9848c9e681b8c6298ccbdd98f4377c0c717935\"",
+          "-I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12",
+          "-DPy_LIMITED_API=0x030A0000",
+          "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/checkpoint.cpp",
+          "-o",
+          "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/bb-geometry-build-g21j1in9/_bb_checkpoint.abi3.so",
+          "-fPIC",
+          "-pthread"
+        ],
+        "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+        "filename": "_bb_checkpoint.abi3.so",
+        "runtime_self_test": {
+          "result": {
+            "abi_version": 1,
+            "passed": true,
+            "stable_abi_min_python": "3.10"
+          },
+          "status": "passed"
+        },
+        "sha256": "bc57c8492ae58427d24f28a3eeac50f87b4de55ed9c54d2c005ac9f15cc7861f"
+      },
+      "windows-x86_64": {
+        "built_utc": "2026-10-31T03:09:46.032841+00:00",
+        "command": [
+          "/usr/bin/x86_64-w64-mingw32-g++",
+          "-O3",
+          "-std=c++17",
+          "-shared",
+          "-fno-fast-math",
+          "-ffp-contract=off",
+          "-DBB_CHECKPOINT_SOURCE_SHA256=\"7927eb355b5fd35b743c30f49a9848c9e681b8c6298ccbdd98f4377c0c717935\"",
+          "-I/workspace/scratch/4d6f2f80b84b/cpp_server_work/build_dependencies/Python-3.11.9/Include",
+          "-DPy_LIMITED_API=0x030A0000",
+          "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/checkpoint.cpp",
+          "-o",
+          "/workspace/scratch/4d6f2f80b84b/cpp_server_work/SERVER_BB/server/native/bb-geometry-build-qu18_uok/_bb_checkpoint.pyd",
+          "/workspace/scratch/4d6f2f80b84b/cpp_server_work/build_dependencies/python-win311/python3.dll",
+          "-static-libgcc",
+          "-static-libstdc++",
+          "-static"
+        ],
+        "compiler": "x86_64-w64-mingw32-g++ (GCC) 13-posix",
+        "filename": "_bb_checkpoint.pyd",
+        "runtime_self_test": {
+          "status": "not_run_cross_compile"
+        },
+        "sha256": "ee3d8ddb0fc8a4bf1dfae13f25f9f20bc9716c5e407bae7efd0e30c3ddfe2654"
+      }
+    },
+    "schema": 1,
+    "source": "checkpoint.cpp",
+    "source_sha256": "7927eb355b5fd35b743c30f49a9848c9e681b8c6298ccbdd98f4377c0c717935"
+  },
+  "schema": 1,
+  "source": "geometry.cpp",
+  "source_sha256": "a43df47fb9867ca8e53a7d5e8f1a2f6eaa2a44df12bc5d8a12d4264386b9c87e"
+}

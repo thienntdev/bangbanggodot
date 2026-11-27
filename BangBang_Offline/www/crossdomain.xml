@@ -1,0 +1,1 @@
+<?xml version="1.0"?><cross-domain-policy><allow-access-from domain="*" to-ports="*" secure="false"/><allow-access-from domain="bangbang.private" to-ports="49119,41843,18443,18083" secure="false"/></cross-domain-policy>

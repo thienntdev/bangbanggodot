@@ -1,0 +1,224 @@
+[
+  {
+    "table": "client_ActivityTemplate_table",
+    "key": {
+      "nId": "8"
+    },
+    "operation": "update",
+    "fields": {
+      "nDuration": {
+        "before": "60",
+        "after": "5785920"
+      },
+      "nLevel": {
+        "before": "10",
+        "after": "1"
+      },
+      "nReStart": {
+        "before": "1",
+        "after": "0"
+      },
+      "nRepeat": {
+        "before": "2",
+        "after": "0"
+      },
+      "szDesc": {
+        "before": "首领之战中，逃脱的外星人首领逃回了他们的母星。为了报一箭之仇，带回了他们最新的科技成果——毁灭者！英雄们，我们必须在月球基地狙击他们，不能让毁灭者来到地球，不然后果不堪设想！为了地球的未来，上吧！",
+        "after": "Boss 10 triệu HP chung toàn server; mỗi người đánh riêng. Có damage nhận 1 lần/đợt: 2 Chip II, 1 Tinh Thể Siêu Năng I, 1 Tinh Thể Siêu Năng II, 1 Lõi Vạn Năng I, 1 Lõi Vạn Năng II, 1 dung dịch No.2 và 1 Bộ Nhớ Thông Tin. Nhận vào túi; túi đầy giữ chờ."
+      },
+      "szDropItems": {
+        "before": "8000004$2004004",
+        "after": "3700002$3800001$3800002$4400001$4400002$3900002$4000001"
+      },
+      "szName": {
+        "before": "毁灭者",
+        "after": "Kẻ Hủy Diệt"
+      },
+      "szStartTime": {
+        "before": "day,18:00:00",
+        "after": "once,2026-01-01,00:00:00"
+      },
+      "szTimeDesc": {
+        "before": "周四，周六 18：00-19：00",
+        "after": "Bản thử mở cả ngày: 30 phút/đợt, nghỉ 60 giây."
+      }
+    }
+  },
+  {
+    "table": "client_MapDropTemplate_table",
+    "key": {
+      "nMapId": "40002"
+    },
+    "operation": "update",
+    "fields": {
+      "nItemId1": {
+        "before": "8000004",
+        "after": "3700002"
+      },
+      "nItemId2": {
+        "before": "2004004",
+        "after": "3800001"
+      },
+      "nItemId3": {
+        "before": null,
+        "after": "3800002"
+      },
+      "nItemId4": {
+        "before": null,
+        "after": "4400001"
+      },
+      "nItemId5": {
+        "before": null,
+        "after": "4400002"
+      },
+      "nItemId6": {
+        "before": null,
+        "after": "3900002"
+      }
+    }
+  },
+  {
+    "table": "client_MapTemplate_table",
+    "key": {
+      "nMapId": "40002"
+    },
+    "operation": "update",
+    "fields": {
+      "nPassTime": {
+        "before": "240",
+        "after": "1800"
+      },
+      "szMapName": {
+        "before": "月球基地",
+        "after": "Cứ địa Lunar"
+      },
+      "szPveDesc": {
+        "before": "首领之战中，逃脱的外星人首领回到了他的母星。为了报一箭之仇，带回了他们的最强兵器——毁灭者！英雄们，我们必须在月球基地狙击他们，不能让毁灭者来到地球，不然后果不堪设想！为了地球的未来，上吧！",
+        "after": "Boss 10 triệu HP chung. Hạ Gấu để nhặt năng lượng; đủ 8 tầng, E đổi thành phun năng lượng."
+      },
+      "szSceneItems": {
+        "before": "10200931,10200932,10200935,483",
+        "after": "10200931,10200932,483,10200971"
+      },
+      "szWinDesc": {
+        "before": "消灭敌军BOSS",
+        "after": "Tiêu diệt Kẻ Hủy Diệt"
+      }
+    }
+  },
+  {
+    "table": "client_SceneItem_Templet",
+    "key": {
+      "nItemId": "10200971"
+    },
+    "operation": "insert",
+    "fields": {
+      "isRotateByOwner": {
+        "before": null,
+        "after": null
+      },
+      "nCampRadius": {
+        "before": null,
+        "after": null
+      },
+      "nCoverSwfPlayTime": {
+        "before": null,
+        "after": null
+      },
+      "nItemId": {
+        "before": null,
+        "after": "10200971"
+      },
+      "nShakeType": {
+        "before": null,
+        "after": null
+      },
+      "nTankId": {
+        "before": null,
+        "after": null
+      },
+      "szCoverEnemySwf": {
+        "before": null,
+        "after": "worldboss_blackhole_v60.swf"
+      },
+      "szCoverMp3": {
+        "before": null,
+        "after": null
+      },
+      "szCoverNeutralSwf": {
+        "before": null,
+        "after": "worldboss_blackhole_v60.swf"
+      },
+      "szCoverSwf": {
+        "before": null,
+        "after": "worldboss_blackhole_v60.swf"
+      },
+      "szFileName": {
+        "before": null,
+        "after": null
+      },
+      "szName": {
+        "before": null,
+        "after": null
+      },
+      "szRemoveMp3": {
+        "before": null,
+        "after": null
+      },
+      "szRemoveSwf": {
+        "before": null,
+        "after": null
+      }
+    }
+  },
+  {
+    "table": "client_BuffTemplate_table",
+    "key": {
+      "nBuffId": "10200973"
+    },
+    "operation": "update",
+    "fields": {
+      "iAspect": {
+        "before": "1",
+        "after": "-1"
+      },
+      "iPersistTime": {
+        "before": "5000",
+        "after": "2000"
+      },
+      "nEffectType": {
+        "before": "30",
+        "after": "36"
+      },
+      "szBuffDesc": {
+        "before": "无法移动",
+        "after": "Trói chân 2 giây; thanh tẩy giải được."
+      },
+      "szBuffName": {
+        "before": "黑洞-停止移动",
+        "after": "Lỗ đen"
+      }
+    }
+  },
+  {
+    "table": "client_BuffTemplate_table",
+    "key": {
+      "nBuffId": "10200994"
+    },
+    "operation": "update",
+    "fields": {
+      "iPersistTime": {
+        "before": "1500",
+        "after": "3530"
+      },
+      "szBuffDesc": {
+        "before": "获得超级力量，给予敌方巨额伤害，同时免疫攻击5秒",
+        "after": "Miễn sát thương trong 3,53 giây thi triển."
+      },
+      "szBuffName": {
+        "before": "超级喷射",
+        "after": "Phun năng lượng"
+      }
+    }
+  }
+]
