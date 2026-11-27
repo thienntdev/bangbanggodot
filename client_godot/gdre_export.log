@@ -1,0 +1,36 @@
+GDRE Tools v2.7.4
+Windows 10.0.26300, headless
+Opening file: E:/game/test 1/downloaded_updates/G6b813/index.e.pck
+Loaded 968 imported files
+Detected Engine Version: 4.7.2
+Detected Bytecode Revision: 4.5.0-stable (ebc36a7)
+Successfully loaded PCK!
+Version: 4.7.2
+Verified 1956 files, no errors detected!
+Extracted 1956 files, no errors detected!
+Saved project config.
+
+
+********************************EXPORT REPORT********************************
+
+Totals:                                 
+Decompiled scripts:                     441
+Scripts not decompiled:                 0
+Imported resources for export session:  968
+Successfully converted:                 968
+Lossy:                                  0
+Rewrote metadata:                       521
+Non-importable conversions:             0
+Not converted:                          0
+Failed conversions:                     0
+-------------
+
+
+
+------------------------------------------------------------------------------------
+
+Use Godot editor version 4.7.2 to edit the project.
+
+*******************************************************************************
+
+Recovery finished in 00m17s
