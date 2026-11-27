@@ -72,6 +72,7 @@ func main() {
 
 	// --- HTTP Auth API ---
 	roomMgr := game.NewRoomManager()
+	roomMgr.StaticDir, _ = filepath.Abs(*staticDir)
 	onlineMgr := game.NewOnlineTracker()
 	broadcast := game.NewBroadcaster()
 	authHandler := &handler.AuthHandler{Store: store}
@@ -111,6 +112,7 @@ func main() {
 	// --- Static file server for game assets ---
 	absStatic, _ := filepath.Abs(*staticDir)
 	log.Printf("[static] serving %s", absStatic)
+	game.InitTankConfigs(absStatic)
 	mux.Handle("/godot/", http.StripPrefix("/godot/", http.FileServer(http.Dir(filepath.Join(absStatic, "godot")))))
 	mux.Handle("/", http.FileServer(http.Dir(absStatic)))
 

@@ -94,7 +94,14 @@ const (
 	MsgRequestExitBattleEnd  int16 = 613  // C→S: exit battle end
 	MsgNotifySelfData        int16 = 1550 // S→C: battle self tank info
 	MsgNotifyOtherList       int16 = 1551 // S→C: battle other tanks list
+	MsgNotifyAddBuff         int16 = 1558 // S→C: add buff to actor
+	MsgNotifyRemoveBuff      int16 = 1559 // S→C: remove buff from actor
+	MsgNotifyAttrChange      int16 = 1560 // S→C: sync actor attribute (1=speed, 4=fireInterval)
+	MsgNotifyAddObject       int16 = 1556 // S→C: add scene object (Wukong space visuals, etc.)
 	MsgSyncSceneData         int16 = 1564 // S→C: battle sync scene data (movement, fire, hp)
+	MsgNotifySkillCoolTime   int16 = 1572 // S→C: skill/props cooldown update
+	MsgNotifySwapSkill       int16 = 1579 // S→C: replace skill slot (e.g. Wukong empowered slot 0)
+	MsgNotifyBuffUpdate      int16 = 1581 // S→C: update buff timer and stacks
 	MsgNotifyBattleEnter     int16 = 1586 // S→C: notify enter battle (battle starts)
 	MsgEnterRoomOk           int16 = 1700 // S→C: enter room ok
 	MsgNotifyRoomOp          int16 = 1701 // S→C: notify room operation
@@ -123,6 +130,17 @@ const (
 
 	// === Battle helper ===
 	MsgNotifyBattleBooster int16 = 1056  // S→C: battle booster
+
+	// === Battle events ===
+	MsgNotifyBorn          int16 = 1552  // S→C: respawn/born
+	MsgNotifyRespawnTimer  int16 = 1553  // S→C: respawn countdown
+	MsgNotifyKillInfo      int16 = 1566  // S→C: kill notification
+	MsgSyncHpChange        int16 = 1605  // S→C: damage/heal numbers (deltas for fly text)
+	MsgNotifySettlement    int16 = 1708  // S→C: battle end settlement
+	MsgNotifyCampKillNum   int16 = 1710  // S→C: camp kill count update
+	MsgNotifyExitBattle    int16 = 1707  // S→C: exit battle / return to room or lobby
+	MsgNotifyOccupyState   int16 = 1565  // S→C: occupy flag state snapshot
+	MsgNotifyOccupyScore   int16 = 1732  // S→C: occupy flag score increment
 
 	// === Room ===
 	MsgRoomList int16 = 2203  // S→C: room list

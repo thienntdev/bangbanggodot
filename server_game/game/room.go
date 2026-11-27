@@ -1,6 +1,9 @@
 package game
 
-import "sync"
+import (
+	"math/rand"
+	"sync"
+)
 
 // Room represents an active game room.
 type Room struct {
@@ -26,12 +29,20 @@ type Room struct {
 	MemberPositions map[uint32]*MemberPos
 	// NextBullet tracks next bullet ID.
 	NextBullet uint32
+	// NextObject tracks next scene-object serial for add_object IDs.
+	NextObject uint32
 	// LoadedMembers tracks which members reported 100% loaded.
 	LoadedMembers map[uint32]bool
 	// MemberSkills tracks skill templates [SkillE, SkillSpace, Passive, SkillR] for each member.
 	MemberSkills map[uint32][4]uint32
+	// MemberTankIDs tracks active TankID for each member in battle.
+	MemberTankIDs map[uint32]uint32
+	// MemberBehaviors tracks per-match ActorBehavior instances for each member.
+	MemberBehaviors map[uint32]ActorBehavior
 	// BattleStarted indicates whether 1586 has been sent for this match.
 	BattleStarted bool
+	// Battle holds runtime battle state (HP, bullets, timer, scores).
+	Battle *BattleState
 }
 
 // MemberPos represents a 2D coordinate in battle.
@@ -42,9 +53,10 @@ type MemberPos struct {
 
 // RoomManager holds all active rooms in memory.
 type RoomManager struct {
-	mu     sync.RWMutex
-	rooms  map[uint32]*Room
-	nextID uint32
+	mu        sync.RWMutex
+	rooms     map[uint32]*Room
+	nextID    uint32
+	StaticDir string // path to server/public dir, used for loading map data
 }
 
 // NewRoomManager creates a new room manager.
@@ -246,6 +258,19 @@ func (m *RoomManager) NextBulletID(roomID uint32) uint32 {
 	return 1
 }
 
+// NextObjectID returns the next unique scene-object ID for this room.
+// Object IDs use (kind<<26)|serial; kind=5 for scene objects visible via add_npc/1556.
+func (m *RoomManager) NextObjectID(roomID uint32) uint32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[roomID]
+	if ok {
+		r.NextObject++
+		return (5 << 26) | r.NextObject
+	}
+	return (5 << 26) | 1
+}
+
 // MarkLoaded records that a player reached 100% loaded.
 func (m *RoomManager) MarkLoaded(roomID uint32, charID uint32) {
 	m.mu.Lock()
@@ -372,6 +397,60 @@ func (m *RoomManager) GetMemberSkills(roomID uint32, charID uint32) [4]uint32 {
 	return sk
 }
 
+// SetMemberTank stores the active TankID for a member in battle.
+func (m *RoomManager) SetMemberTank(roomID uint32, charID uint32, tankID uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[roomID]
+	if !ok {
+		return
+	}
+	if r.MemberTankIDs == nil {
+		r.MemberTankIDs = make(map[uint32]uint32)
+	}
+	r.MemberTankIDs[charID] = tankID
+}
+
+// GetMemberTank returns the active TankID for a member in battle (0 if unset).
+func (m *RoomManager) GetMemberTank(roomID uint32, charID uint32) uint32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.rooms[roomID]
+	if !ok || r.MemberTankIDs == nil {
+		return 0
+	}
+	return r.MemberTankIDs[charID]
+}
+
+// InitMemberBehavior creates and stores a fresh ActorBehavior for a member's tank in battle.
+func (m *RoomManager) InitMemberBehavior(roomID uint32, charID uint32, tankID uint32) ActorBehavior {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	beh := NewTankBehavior(tankID)
+	r, ok := m.rooms[roomID]
+	if ok {
+		if r.MemberBehaviors == nil {
+			r.MemberBehaviors = make(map[uint32]ActorBehavior)
+		}
+		r.MemberBehaviors[charID] = beh
+	}
+	return beh
+}
+
+// GetMemberBehavior returns the member's ActorBehavior (creating a default one if missing).
+func (m *RoomManager) GetMemberBehavior(roomID uint32, charID uint32, tankID uint32) ActorBehavior {
+	m.mu.RLock()
+	r, ok := m.rooms[roomID]
+	if ok && r.MemberBehaviors != nil {
+		if beh, exists := r.MemberBehaviors[charID]; exists && beh != nil {
+			m.mu.RUnlock()
+			return beh
+		}
+	}
+	m.mu.RUnlock()
+	return m.InitMemberBehavior(roomID, charID, tankID)
+}
+
 // FindRoomByMember finds the room that contains charID.
 func (m *RoomManager) FindRoomByMember(charID uint32) *Room {
 	m.mu.RLock()
@@ -389,6 +468,14 @@ func (m *RoomManager) FindRoomByMember(charID uint32) *Room {
 // RemoveMember removes a char from their room and deletes the room if empty.
 // Returns the room ID they were in, or 0.
 func (m *RoomManager) RemoveMember(charID uint32) uint32 {
+	rid, _ := m.RemoveMemberWithTransfer(charID)
+	return rid
+}
+
+// RemoveMemberWithTransfer removes a char from their room and, if they were the owner
+// and other members remain, transfers ownership to a random remaining member.
+// Returns (roomID, newOwnerID). newOwnerID is 0 if no transfer occurred or room is now empty.
+func (m *RoomManager) RemoveMemberWithTransfer(charID uint32) (uint32, uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range m.rooms {
@@ -400,13 +487,21 @@ func (m *RoomManager) RemoveMember(charID uint32) uint32 {
 				delete(r.MemberReady, charID)
 				delete(r.MemberPositions, charID)
 				delete(r.LoadedMembers, charID)
+				delete(r.MemberSkills, charID)
+				delete(r.MemberTankIDs, charID)
+				delete(r.MemberBehaviors, charID)
 				rid := r.ID
+				var newOwner uint32
 				if len(r.Members) == 0 {
 					delete(m.rooms, rid)
+				} else if r.OwnerID == charID {
+					newOwner = r.Members[rand.Intn(len(r.Members))]
+					r.OwnerID = newOwner
+					r.MemberReady[newOwner] = true
 				}
-				return rid
+				return rid, newOwner
 			}
 		}
 	}
-	return 0
+	return 0, 0
 }

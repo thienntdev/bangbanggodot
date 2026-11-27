@@ -733,10 +733,13 @@ type TankBattleInfo struct {
 	BattleExp   uint32
 	BattleLevel uint8
 	TankLevel   uint8
-	MP          int32
-	MaxMP       int32
-	Shield      int32
-	Skills      [4]uint32
+	MP           int32
+	MaxMP        int32
+	Shield       int32
+	FireRate     int16
+	MoveSpeed    int16
+	NormalBullet uint32
+	Skills       [4]uint32
 }
 
 func putTankInfo(w *Writer, t *TankBattleInfo) {
@@ -763,18 +766,31 @@ func putTankInfo(w *Writer, t *TankBattleInfo) {
 func EncodeNotifySelfData(self *TankBattleInfo) []byte {
 	w := NewWriter()
 	putTankInfo(w, self)
-	w.PutI16(100) // m_fireRate
-	w.PutI16(200) // m_speed
+
+	fireRate := self.FireRate
+	if fireRate <= 0 {
+		fireRate = 500
+	}
+	moveSpeed := self.MoveSpeed
+	if moveSpeed <= 0 {
+		moveSpeed = 200
+	}
+	w.PutI16(fireRate)  // m_fireRate
+	w.PutI16(moveSpeed) // m_speed
 
 	// m_skillVec: PropsInfo array (slot 0 = normal shot, slot 1 = E, slot 2 = Space, slot 3 = R)
 	var slots []struct {
 		slotNo  uint8
 		propsID uint32
 	}
+	normalBullet := self.NormalBullet
+	if normalBullet == 0 {
+		normalBullet = 1
+	}
 	slots = append(slots, struct {
 		slotNo  uint8
 		propsID uint32
-	}{0, 1}) // Slot 0: normal shot
+	}{0, normalBullet}) // Slot 0: normal shot
 
 	skillE := self.Skills[0]
 	if skillE == 0 {
@@ -799,7 +815,7 @@ func EncodeNotifySelfData(self *TankBattleInfo) []byte {
 		slots = append(slots, struct {
 			slotNo  uint8
 			propsID uint32
-		}{3, skillR})
+		}{10, skillR}) // Slot 10: R skill (client uses slot 10 for the R button, not slot 3)
 	}
 
 	w.PutU16(uint16(len(slots)))
@@ -890,4 +906,540 @@ func EncodeSyncSceneFire(bulletID, shooterID uint32, startX, startY, destX, dest
 	w.PutU16(0) // m_shieldVec
 
 	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeSyncSceneSkill builds message 1564 (SceneMessage.SyncSceneData) with a single NotifySkill.
+func EncodeSyncSceneSkill(ownerID, targetID, skillID uint32, startX, startY, destX, destY int16, ready uint8) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+
+	// 3. m_skillVec (len = 1)
+	w.PutU16(1)
+	w.PutU32(ownerID)
+	w.PutU32(targetID)
+	w.PutU32(skillID)
+	w.PutI16(startX)
+	w.PutI16(startY)
+	w.PutI16(destX)
+	w.PutI16(destY)
+	w.PutU8(ready)
+	w.PutU8(1) // count
+
+	// 4..10: empty vectors
+	w.PutU16(0) // m_hpVec
+	w.PutU16(0) // m_deadVec
+	w.PutU16(0) // m_mpVec
+	w.PutU16(0) // m_blowUpVec
+	w.PutU16(0) // m_delVec
+	w.PutU16(0) // m_overVec
+	w.PutU16(0) // m_shieldVec
+
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeSyncSceneExpiredBullet builds message 1564 with a single entry in the expired_bullets vector.
+// Used to remove scene objects (Wukong space visuals, etc.) after their lifetime expires.
+func EncodeSyncSceneExpiredBullet(objectID uint32) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+	w.PutU16(0) // 4. m_hpVec
+	w.PutU16(0) // 5. m_deadVec
+	w.PutU16(0) // 6. m_mpVec
+	w.PutU16(0) // 7. m_blowUpVec
+	w.PutU16(0) // 8. m_delVec
+	// 9. m_overVec (expired_bullets) - len = 1
+	w.PutU16(1)
+	w.PutU32(objectID)
+	w.PutU16(0) // 10. m_shieldVec
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeNotifySkillCooldown builds message 1572 (PropsInfo + m_nOwnerId) to start skill cooldown on client.
+func EncodeNotifySkillCooldown(ownerID, skillID uint32, slotNo uint8, endTimeMS uint64) []byte {
+	w := NewWriter()
+	w.PutU32(skillID)
+	w.PutU8(slotNo)
+	w.PutI8(-1) // iCount = -1 (unlimited)
+	w.PutU64Words(uint32(endTimeMS&0xFFFFFFFF), uint32(endTimeMS>>32))
+	w.PutU64Words(0, 0) // nCountCoolTime
+	w.PutU32(ownerID)
+	return BuildFrame(MsgNotifySkillCoolTime, 0, w.Bytes())
+}
+
+// EncodeNotifySwapSkill builds message 1579 to swap a skill slot's active template (e.g. empowered basic attack).
+func EncodeNotifySwapSkill(skillID uint32, slotNo uint8, endTimeMS uint64) []byte {
+	w := NewWriter()
+	w.PutU32(skillID)
+	w.PutU8(slotNo)
+	w.PutI8(-1)
+	w.PutU64Words(uint32(endTimeMS&0xFFFFFFFF), uint32(endTimeMS>>32))
+	w.PutU64Words(0, 0)
+	return BuildFrame(MsgNotifySwapSkill, 0, w.Bytes())
+}
+
+// EncodeNotifyAddBuff builds message 1558 (targetID, buffTemplateID, instID, stacks, casterID, existTimeMS).
+func EncodeNotifyAddBuff(targetID, templateID, instID uint32, stacks uint8, casterID, durationMS uint32) []byte {
+	w := NewWriter()
+	w.PutU32(targetID)
+	w.PutU32(templateID)
+	w.PutU32(instID)
+	w.PutU8(stacks)
+	w.PutU32(casterID)
+	w.PutU32(durationMS)
+	return BuildFrame(MsgNotifyAddBuff, 0, w.Bytes())
+}
+
+// EncodeNotifyRemoveBuff builds message 1559 (targetID, buffInstID).
+func EncodeNotifyRemoveBuff(targetID, instID uint32) []byte {
+	w := NewWriter()
+	w.PutU32(targetID)
+	w.PutU32(instID)
+	return BuildFrame(MsgNotifyRemoveBuff, 0, w.Bytes())
+}
+
+// EncodeNotifyAttrChange builds message 1560 (acctOid, updateType, updateVal).
+// updateType: 1=speed, 3=maxHp, 4=fireIntervalMS, 5=lives, 7=hp, 8=maxMp.
+func EncodeNotifyAttrChange(acctID uint32, updateType uint8, val int32) []byte {
+	w := NewWriter()
+	w.PutU32(acctID)
+	w.PutU8(updateType)
+	w.PutI32(val)
+	return BuildFrame(MsgNotifyAttrChange, 0, w.Bytes())
+}
+
+// EncodeNotifyBuffUpdate builds message 1581 (instID, existTimeMS, stacks).
+func EncodeNotifyBuffUpdate(instID, durationMS uint32, stacks uint8) []byte {
+	w := NewWriter()
+	w.PutU32(instID)
+	w.PutU32(durationMS)
+	w.PutU8(stacks)
+	return BuildFrame(MsgNotifyBuffUpdate, 0, w.Bytes())
+}
+
+// EncodeAddObject builds message 1556 (NotifyAddObject).
+// Schema: m_nSceneId(u32) + ObjInfo{m_objId(u32), m_tplId(u32), m_x(i16), m_y(i16),
+//   m_hp(i32), m_bCamp(u8), m_maxHp(i32), m_ownerId(u32), m_shield(i32), m_buffVec(u16 len=0)}
+func EncodeAddObject(sceneID, objectID, templateID uint32, x, y int16, camp uint8, ownerID uint32) []byte {
+	w := NewWriter()
+	w.PutU32(sceneID)    // m_nSceneId
+	w.PutU32(objectID)   // m_objId
+	w.PutU32(templateID) // m_tplId
+	w.PutI16(x)          // m_x
+	w.PutI16(y)          // m_y
+	w.PutI32(0)          // m_hp
+	w.PutU8(camp)        // m_bCamp
+	w.PutI32(0)          // m_maxHp
+	w.PutU32(ownerID)    // m_ownerId
+	w.PutI32(0)          // m_shield
+	w.PutU16(0)          // m_buffVec (empty array)
+	return BuildFrame(MsgNotifyAddObject, 0, w.Bytes())
+}
+
+// EncodeAddDrop builds message 1556 for a map pickup/drop (hp=1, maxHp=1, ownerId=1).
+func EncodeAddDrop(sceneID, dropID, templateID uint32, x, y int16) []byte {
+	w := NewWriter()
+	w.PutU32(sceneID)
+	w.PutU32(dropID)
+	w.PutU32(templateID)
+	w.PutI16(x)
+	w.PutI16(y)
+	w.PutI32(1) // m_hp
+	w.PutU8(0)  // m_bCamp
+	w.PutI32(1) // m_maxHp
+	w.PutU32(1) // m_ownerId
+	w.PutI32(0) // m_shield
+	w.PutU16(0) // m_buffVec
+	return BuildFrame(MsgNotifyAddObject, 0, w.Bytes())
+}
+
+// EncodeSyncSceneDel builds message 1564 with m_delVec entries (removed map objects/drops).
+func EncodeSyncSceneDel(removedIDs []uint32) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+	w.PutU16(0) // 4. m_hpVec
+	w.PutU16(0) // 5. m_deadVec
+	w.PutU16(0) // 6. m_mpVec
+	w.PutU16(0) // 7. m_blowUpVec
+	// 8. m_delVec
+	w.PutU16(uint16(len(removedIDs)))
+	for _, id := range removedIDs {
+		w.PutU32(id)
+	}
+	w.PutU16(0) // 9. m_overVec
+	w.PutU16(0) // 10. m_shieldVec
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+
+// EncodeSyncSceneHP builds message 1564 with m_hpVec entries.
+// Each entry: u32 objID + i32 hp (current HP, not delta).
+func EncodeSyncSceneHP(hpChanges []struct{ ObjID uint32; HP int32 }) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+	// 4. m_hpVec
+	w.PutU16(uint16(len(hpChanges)))
+	for _, hp := range hpChanges {
+		w.PutU32(hp.ObjID)
+		w.PutI32(hp.HP)
+	}
+	w.PutU16(0) // 5. m_deadVec
+	w.PutU16(0) // 6. m_mpVec
+	w.PutU16(0) // 7. m_blowUpVec
+	w.PutU16(0) // 8. m_delVec
+	w.PutU16(0) // 9. m_overVec
+	w.PutU16(0) // 10. m_shieldVec
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeSyncSceneMP builds message 1564 with m_mpVec entries.
+// Each entry: u32 objID + i32 mp (current MP).
+func EncodeSyncSceneMP(mpChanges []struct{ ObjID uint32; MP int32 }) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+	w.PutU16(0) // 4. m_hpVec
+	w.PutU16(0) // 5. m_deadVec
+	// 6. m_mpVec
+	w.PutU16(uint16(len(mpChanges)))
+	for _, mp := range mpChanges {
+		w.PutU32(mp.ObjID)
+		w.PutI32(mp.MP)
+	}
+	w.PutU16(0) // 7. m_blowUpVec
+	w.PutU16(0) // 8. m_delVec
+	w.PutU16(0) // 9. m_overVec
+	w.PutU16(0) // 10. m_shieldVec
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeSyncSceneBlown builds message 1564 with m_blowUpVec + m_hpVec + m_deadVec.
+// Combined packet for bullet-hit events.
+func EncodeSyncSceneCombat(
+	hpChanges []struct{ ObjID uint32; HP int32 },
+	deaths []struct{ ObjID uint32; X, Y int16 },
+	blownBullets []uint32,
+	expired []uint32,
+) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+
+	// 4. m_hpVec
+	w.PutU16(uint16(len(hpChanges)))
+	for _, hp := range hpChanges {
+		w.PutU32(hp.ObjID)
+		w.PutI32(hp.HP)
+	}
+
+	// 5. m_deadVec — struct AINpcDead: u32 m_AINpcId, i16 m_x, i16 m_y
+	w.PutU16(uint16(len(deaths)))
+	for _, d := range deaths {
+		w.PutU32(d.ObjID)
+		w.PutI16(d.X)
+		w.PutI16(d.Y)
+	}
+
+	w.PutU16(0) // 6. m_mpVec
+
+	// 7. m_blowUpVec
+	w.PutU16(uint16(len(blownBullets)))
+	for _, b := range blownBullets {
+		w.PutU32(b)
+	}
+
+	w.PutU16(0) // 8. m_delVec
+
+	// 9. m_overVec (expired bullets)
+	w.PutU16(uint16(len(expired)))
+	for _, e := range expired {
+		w.PutU32(e)
+	}
+
+	w.PutU16(0) // 10. m_shieldVec
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeNotifyRespawnTimer builds message 1553.
+// Fields: m_nAcctId(u32), m_nDelayMs(i32)
+func EncodeNotifyRespawnTimer(acctID uint32, delayMS int32) []byte {
+	w := NewWriter()
+	w.PutU32(acctID)
+	w.PutI32(delayMS)
+	return BuildFrame(MsgNotifyRespawnTimer, 0, w.Bytes())
+}
+
+// EncodeNotifyKillInfo builds message 1566.
+// Fields: killer(u32), victim(u32), skill(u32), x(i16), y(i16), multi(u8), streak(u8), dead_streak(u8), first_blood(u8), assist_count(u16), assists([]u32)
+func EncodeNotifyKillInfo(killerID, victimID, skillTpl uint32, x, y int16) []byte {
+	w := NewWriter()
+	w.PutU32(killerID)
+	w.PutU32(victimID)
+	w.PutU32(skillTpl)
+	w.PutI16(x)
+	w.PutI16(y)
+	w.PutU8(0) // multi kill
+	w.PutU8(0) // streak
+	w.PutU8(0) // dead streak
+	w.PutU8(0) // first blood
+	w.PutU16(0) // assist count
+	return BuildFrame(MsgNotifyKillInfo, 0, w.Bytes())
+}
+
+// EncodeNotifyBorn builds message 1552 (NotifyAddTank — respawn).
+// Client expects m_selfData = full TankInfo struct (same as 1550).
+func EncodeNotifyBorn(tank *TankBattleInfo) []byte {
+	w := NewWriter()
+	putTankInfo(w, tank)
+	return BuildFrame(MsgNotifyBorn, 0, w.Bytes())
+}
+
+// HpDelta holds one entry for SyncHpChange (msg 1605).
+type HpDelta struct {
+	ObjID    uint32
+	Delta    int32  // negative = damage, positive = heal
+	Fury     uint8  // >0 = crit
+	CasterID uint32 // who caused the change
+}
+
+// EncodeSyncHpChange builds message 1605 (SceneMessage.SyncHpChange).
+// Schema: m_hpChgInfoVec: array[u16 length] of HpChangeInfo { u32 m_objId, i32 m_objHp, u8 m_nFury, u32 m_casterId }
+func EncodeSyncHpChange(deltas []HpDelta) []byte {
+	w := NewWriter()
+	w.PutU16(uint16(len(deltas)))
+	for _, d := range deltas {
+		w.PutU32(d.ObjID)
+		w.PutI32(d.Delta)
+		w.PutU8(d.Fury)
+		w.PutU32(d.CasterID)
+	}
+	return BuildFrame(MsgSyncHpChange, 0, w.Bytes())
+}
+
+// EncodeSyncSceneCombatEx builds message 1564 with hpVec + deadVec + blowUpVec + overVec + shieldVec.
+func EncodeSyncSceneCombatEx(
+	hpChanges []struct{ ObjID uint32; HP int32 },
+	deaths []struct{ ObjID uint32; X, Y int16 },
+	blownBullets []uint32,
+	expired []uint32,
+	shields []struct{ ObjID uint32; Shield int32 },
+) []byte {
+	w := NewWriter()
+	w.PutU16(0) // 1. m_moveVec
+	w.PutU16(0) // 2. m_fireVec
+	w.PutU16(0) // 3. m_skillVec
+
+	// 4. m_hpVec
+	w.PutU16(uint16(len(hpChanges)))
+	for _, hp := range hpChanges {
+		w.PutU32(hp.ObjID)
+		w.PutI32(hp.HP)
+	}
+
+	// 5. m_deadVec
+	w.PutU16(uint16(len(deaths)))
+	for _, d := range deaths {
+		w.PutU32(d.ObjID)
+		w.PutI16(d.X)
+		w.PutI16(d.Y)
+	}
+
+	w.PutU16(0) // 6. m_mpVec
+
+	// 7. m_blowUpVec
+	w.PutU16(uint16(len(blownBullets)))
+	for _, b := range blownBullets {
+		w.PutU32(b)
+	}
+
+	w.PutU16(0) // 8. m_delVec
+
+	// 9. m_overVec (expired bullets)
+	w.PutU16(uint16(len(expired)))
+	for _, e := range expired {
+		w.PutU32(e)
+	}
+
+	// 10. m_shieldVec
+	w.PutU16(uint16(len(shields)))
+	for _, s := range shields {
+		w.PutU32(s.ObjID)
+		w.PutI32(s.Shield)
+	}
+
+	return BuildFrame(MsgSyncSceneData, 0, w.Bytes())
+}
+
+// EncodeNotifySettlement builds message 1708 (NotifyBattleEnd).
+// Schema: m_nSceneId(u32), m_nMapId(u32), m_battleTime(u32), m_roomType(u8),
+//   m_winCamp(u8), m_winType(u8), m_rebLifeCount(i16), m_buleLifeCount(i16),
+//   m_tankVec(array[u16] of TankSettleInfo), m_escapeVec(array[u16] of TankSettleInfo),
+//   m_svrExpRate(f32), m_tokengoldRate(f32), m_bpvpActOpen(u8), m_nItemDropRate(u32),
+//   m_nKiller(u32), m_nAssister(u32), m_nKDA(u32), m_nDestroyer(u32),
+//   m_nVictoryMvp(u32), m_nDefeatMvp(u32), m_sceneUuid(utf8)
+func EncodeNotifySettlement(sceneID, mapID uint32, elapsedMS int32, roomType, winner uint8, scores [3]int32, players []SettlementPlayer) []byte {
+	w := NewWriter()
+	w.PutU32(sceneID)                 // m_nSceneId
+	w.PutU32(mapID)                   // m_nMapId
+	w.PutU32(uint32(elapsedMS / 1000)) // m_battleTime (seconds)
+	w.PutU8(roomType)                 // m_roomType
+	w.PutU8(winner)                   // m_winCamp (0=draw, 1=camp1, 2=camp2)
+	w.PutU8(1)                        // m_winType (1=normal, 3=surrender, 4=draw)
+	w.PutI16(int16(scores[1]))        // m_rebLifeCount (red kills)
+	w.PutI16(int16(scores[2]))        // m_buleLifeCount (blue kills)
+
+	// m_tankVec: array[u16] of TankSettleInfo
+	w.PutU16(uint16(len(players)))
+	for _, p := range players {
+		putTankSettleInfo(w, &p, winner)
+	}
+
+	// m_escapeVec: empty array
+	w.PutU16(0)
+
+	// m_svrExpRate, m_tokengoldRate
+	w.PutF32(1.0) // m_svrExpRate
+	w.PutF32(1.0) // m_tokengoldRate
+
+	w.PutU8(0)  // m_bpvpActOpen
+	w.PutU32(0) // m_nItemDropRate
+	w.PutU32(0) // m_nKiller
+	w.PutU32(0) // m_nAssister
+	w.PutU32(0) // m_nKDA
+	w.PutU32(0) // m_nDestroyer
+	w.PutU32(0) // m_nVictoryMvp
+	w.PutU32(0) // m_nDefeatMvp
+
+	// m_sceneUuid (utf8 = u16 length + bytes)
+	w.PutU16(0) // empty string
+
+	return BuildFrame(MsgNotifySettlement, 0, w.Bytes())
+}
+
+// putTankSettleInfo writes one TankSettleInfo struct.
+// Schema: m_charOid(u32), m_tankTpltId(u32), m_iStatData(array[u16] of i32),
+//   m_iTeamMerit(i16), m_iOldElo(i16), m_iNewElo(i16), m_iTankGains(i16),
+//   m_iNewTankGains(i32), m_bAward(u8), m_isWin(u8), m_iRobotType(u8),
+//   m_eloSectionId(u8), m_battleLevel(u8), m_roomCount(u8), m_camp(u8),
+//   m_expVec(array[u16] of SettleGroup), m_coinVec(array[u16] of SettleGroup),
+//   m_tankExpVec(array[u16] of SettleGroup), m_itemVec(array[u16] of GiveItemStruct),
+//   m_evalPve(PVE_Evaluation_Result: 5x u8)
+func putTankSettleInfo(w *Writer, p *SettlementPlayer, winner uint8) {
+	w.PutU32(p.AcctID)  // m_charOid
+	w.PutU32(p.TankID)  // m_tankTpltId
+
+	// m_iStatData: array of i32
+	// [0]=deaths, [1]=kills, [2]=score, [3]=assists, [4]=0, [5]=0, [6]=damage
+	statData := []int32{p.Deaths, p.Kills, p.Kills, p.Assists, 0, 0, p.Damage}
+	w.PutU16(uint16(len(statData)))
+	for _, v := range statData {
+		w.PutI32(v)
+	}
+
+	w.PutI16(0) // m_iTeamMerit
+	w.PutI16(0) // m_iOldElo
+	w.PutI16(0) // m_iNewElo
+	w.PutI16(0) // m_iTankGains
+	w.PutI32(0) // m_iNewTankGains
+	w.PutU8(0)  // m_bAward
+
+	var isWin uint8
+	if p.Camp == winner {
+		isWin = 1
+	}
+	w.PutU8(isWin) // m_isWin
+
+	w.PutU8(0) // m_iRobotType
+	w.PutU8(0) // m_eloSectionId
+	w.PutU8(1) // m_battleLevel
+	w.PutU8(1) // m_roomCount
+	w.PutU8(p.Camp) // m_camp
+
+	// m_expVec, m_coinVec, m_tankExpVec: empty arrays
+	w.PutU16(0) // m_expVec
+	w.PutU16(0) // m_coinVec
+	w.PutU16(0) // m_tankExpVec
+
+	// m_itemVec: empty array
+	w.PutU16(0)
+
+	// m_evalPve: PVE_Evaluation_Result (5x u8)
+	w.PutU8(0) // m_iTotalEval
+	w.PutU8(0) // m_iHarmEval
+	w.PutU8(0) // m_iDeadEval
+	w.PutU8(0) // m_iTimeEval
+	w.PutU8(0) // m_iBoosterEval
+}
+
+// SettlementPlayer holds per-player end-of-match stats.
+type SettlementPlayer struct {
+	AcctID  uint32
+	Kills   int32
+	Deaths  int32
+	Assists int32
+	Damage  int32
+	Camp    uint8
+	TankID  uint32
+	MVP     uint8
+}
+
+// EncodeNotifyCampKillNum builds message 1710 (NotifyCampKillNum).
+// Schema: m_nRedKill(i32), m_nBlueKill(i32)
+func EncodeNotifyCampKillNum(redKills, blueKills int32) []byte {
+	w := NewWriter()
+	w.PutI32(redKills)
+	w.PutI32(blueKills)
+	return BuildFrame(MsgNotifyCampKillNum, 0, w.Bytes())
+}
+
+// EncodeNotifyExitBattle builds message 1707 (SceneMessage.NotifyExitBattle).
+// Schema: m_nErrId(u32), m_nSceneId(u32), m_nCharId(u32), m_exitType(u32), m_isLook(u32)
+func EncodeNotifyExitBattle(errID, sceneID, charID, exitType, isLook uint32) []byte {
+	w := NewWriter()
+	w.PutU32(errID)
+	w.PutU32(sceneID)
+	w.PutU32(charID)
+	w.PutU32(exitType)
+	w.PutU32(isLook)
+	return BuildFrame(MsgNotifyExitBattle, 0, w.Bytes())
+}
+
+// OccupyFlagWire holds a single flag entry for msg 1565.
+type OccupyFlagWire struct {
+	Index     int32
+	Camp      int32
+	Locked    int32
+	Progress  int32
+	ScoreTime uint32
+}
+
+// EncodeNotifyOccupyState builds message 1565 (flag capture snapshot).
+func EncodeNotifyOccupyState(flags []OccupyFlagWire) []byte {
+	w := NewWriter()
+	w.PutU16(uint16(len(flags)))
+	for _, f := range flags {
+		w.PutI32(f.Index)
+		w.PutI32(f.Camp)
+		w.PutI32(f.Locked)
+		w.PutI32(f.Progress)
+		w.PutU32(f.ScoreTime)
+	}
+	return BuildFrame(MsgNotifyOccupyState, 0, w.Bytes())
+}
+
+// EncodeNotifyOccupyScore builds message 1732 (flag score increment).
+func EncodeNotifyOccupyScore(index, camp, gain int32) []byte {
+	w := NewWriter()
+	w.PutI32(index)
+	w.PutI32(camp)
+	w.PutI32(gain)
+	return BuildFrame(MsgNotifyOccupyScore, 0, w.Bytes())
 }

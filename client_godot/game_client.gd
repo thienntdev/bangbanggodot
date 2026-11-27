@@ -3319,6 +3319,9 @@ func _handle_play_packet(type: int, value: Dictionary) -> bool:
 					battle.tank_prof[int(prof_info.get("m_charId", 0))] = -1 if prof_val < 0 or prof_val > 2147483647 else prof_val
 		return true
 	if type == 1707:
+		if int(value.m_nErrId) == 0 and int(value.get("m_exitType", 0)) == 2 and int(value.m_nCharId) != account_oid:
+			battle.back_count += 1
+			changed.emit()
 		if int(value.m_nCharId) == account_oid:
 			if int(value.m_nErrId) != 0:
 				_exit_main = false

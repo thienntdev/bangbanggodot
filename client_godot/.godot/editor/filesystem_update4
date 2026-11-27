@@ -1,0 +1,5 @@
+res://battle/battle_fx.gd
+res://battle/asset_pack.gd
+res://game_client.gd
+res://battle/battle_state.gd
+res://battle/pvp_result.gd

@@ -85,11 +85,17 @@ func (c *WSConn) HandleLoop() {
 			// Notify room members if in a room
 			if c.roomID != 0 {
 				room := c.roomMgr.GetRoom(c.roomID)
-				c.roomMgr.RemoveMember(charID)
+				_, newOwner := c.roomMgr.RemoveMemberWithTransfer(charID)
 				if room != nil {
+					remaining := c.roomMgr.GetMembers(room.ID)
 					// Broadcast leave (RoomOp 1 = leave) to remaining members
 					leaveFrame := protocol.EncodeNotifyRoomOp(1, charID, charID)
-					c.broadcast.SendToAll(room.Members, charID, leaveFrame)
+					c.broadcast.SendToAll(remaining, charID, leaveFrame)
+					if newOwner != 0 {
+						ownerFrame := protocol.EncodeNotifyRoomOp(26, newOwner, newOwner)
+						c.broadcast.SendToAll(remaining, 0, ownerFrame)
+						log.Printf("[%s] transferred room %d ownership to %d", c.role, room.ID, newOwner)
+					}
 				}
 			}
 			log.Printf("[%s] player %s (id=%d) went offline", c.role, c.session.Character.Name, charID)
@@ -430,7 +436,12 @@ func (c *WSConn) handleFrame(frame []byte) error {
 		}
 		r := protocol.NewReader(body)
 		mapID, _ := r.GetU32()
-		log.Printf("[%s] set map: mapID=%d", c.role, mapID)
+		if mapID == 0 {
+			mapID = game.RandomMapID()
+			log.Printf("[%s] random map selected: mapID=%d", c.role, mapID)
+		} else {
+			log.Printf("[%s] set map: mapID=%d", c.role, mapID)
+		}
 		mapFrame := protocol.EncodeNotifyRoomMap(mapID)
 		room := c.roomMgr.GetRoom(c.roomID)
 		if room == nil && c.session != nil && c.session.Character != nil {
@@ -457,11 +468,16 @@ func (c *WSConn) handleFrame(frame []byte) error {
 		}
 		p := c.session.Character
 		creatorBrief := c.buildCharBrief(1) // host is Camp 1 (Camp A)
+		mapID := req.MapID
+		if mapID == 0 {
+			mapID = game.RandomMapID()
+			log.Printf("[%s] random map for new room: mapID=%d", c.role, mapID)
+		}
 		// Create room in room manager
-		room := c.roomMgr.CreateRoom(req.Name, req.BType, uint32(req.BMode), req.MapID, req.Password, p.CharID, creatorBrief)
+		room := c.roomMgr.CreateRoom(req.Name, req.BType, uint32(req.BMode), mapID, req.Password, p.CharID, creatorBrief)
 		c.roomID = room.ID
-		frame := protocol.EncodeEnterRoomOk(room.ID, p.CharID, req.Name, req.BType, uint32(req.BMode), req.MapID, req.Password, creatorBrief)
-		log.Printf("[%s] room created: id=%d, name=%s, type=%d, map=%d", c.role, room.ID, req.Name, req.BType, req.MapID)
+		frame := protocol.EncodeEnterRoomOk(room.ID, p.CharID, req.Name, req.BType, uint32(req.BMode), mapID, req.Password, creatorBrief)
+		log.Printf("[%s] room created: id=%d, name=%s, type=%d, map=%d", c.role, room.ID, req.Name, req.BType, mapID)
 		return c.Send(frame)
 
 	case protocol.MsgRequestJoinRoom:
@@ -540,8 +556,14 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			if roomOp == 1 {
 				// Leave room
 				log.Printf("[%s] player %d left room %d", c.role, charID, room.ID)
-				c.roomMgr.RemoveMember(charID)
+				_, newOwner := c.roomMgr.RemoveMemberWithTransfer(charID)
 				c.roomID = 0
+				if newOwner != 0 {
+					remaining := c.roomMgr.GetMembers(room.ID)
+					ownerFrame := protocol.EncodeNotifyRoomOp(26, newOwner, newOwner)
+					c.broadcast.SendToAll(remaining, 0, ownerFrame)
+					log.Printf("[%s] transferred room %d ownership to %d", c.role, room.ID, newOwner)
+				}
 			} else if roomOp == 20 {
 				// Kick member
 				log.Printf("[%s] host %d kicked member %d from room %d", c.role, charID, target, room.ID)
@@ -559,6 +581,15 @@ func (c *WSConn) handleFrame(frame []byte) error {
 
 			// If op == 24, host is starting the match -> broadcast NotifyStartGame (1705)
 			if roomOp == 24 {
+				// If map is 0 (random), pick one now
+				if room.MapID == 0 {
+					room.MapID = game.RandomMapID()
+					c.roomMgr.UpdateMap(room.ID, room.MapID)
+					log.Printf("[%s] 🎲 random map for start: mapID=%d", c.role, room.MapID)
+					// notify all players of the chosen map
+					mapFrame := protocol.EncodeNotifyRoomMap(room.MapID)
+					c.broadcast.SendToAll(room.Members, 0, mapFrame)
+				}
 				log.Printf("[%s] 🚀 starting match for room %d (map=%d, %d players: %v)",
 					c.role, room.ID, room.MapID, len(room.Members), room.Members)
 				room.State = 1 // in-battle
@@ -632,8 +663,25 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			}
 		}
 		if room != nil && charID != 0 {
+			// Block movement if dead, stunned, or battle finished
+			if room.Battle != nil && (!room.Battle.IsAlive(charID) || room.Battle.IsFinished() || room.Battle.IsStunned(charID, time.Now().UnixMilli())) {
+				return nil
+			}
+			// Server-side movement validation: reject position inside movement walls (solid + water)
+			// Python reference: battle_map.py uses movement_walls (solid + water + NPC rects) for vehicle blocking
+			if room.Battle != nil {
+				destX, destY := float64(req.StartX), float64(req.StartY)
+				if game.PointInsideWall(room.Battle.MoveWalls, destX, destY) {
+					return nil // position inside water or solid wall — reject
+				}
+				if game.PointInsideWall(game.NPCMovementWalls(room.Battle.NPCs), destX, destY) {
+					return nil // position inside alive NPC bounding box — reject
+				}
+			}
+			tankID := c.roomMgr.GetMemberTank(room.ID, charID)
+			moveSpeed := game.GetTankConfig(tankID).MoveSpeed
 			c.roomMgr.SetMemberPos(room.ID, charID, int16(req.StartX), int16(req.StartY))
-			syncFrame := protocol.EncodeSyncSceneMove(charID, int16(req.StartX), int16(req.StartY), 200, req.Direction, 0)
+			syncFrame := protocol.EncodeSyncSceneMove(charID, int16(req.StartX), int16(req.StartY), moveSpeed, req.Direction, 0)
 			c.broadcast.SendToAll(room.Members, charID, syncFrame)
 		}
 		return nil
@@ -656,32 +704,68 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			}
 		}
 		if room != nil && charID != 0 {
+			// Check if player is alive, not CC'd, battle is not finished, and slot is off cooldown
+			nowMS := time.Now().UnixMilli()
+			if room.Battle != nil && (!room.Battle.IsAlive(charID) || room.Battle.IsFinished() || !room.Battle.CanCastSlot(charID, req.SlotNo, nowMS) || room.Battle.IsSlotOnCooldown(charID, req.SlotNo, nowMS)) {
+				return nil
+			}
 			startX, startY := c.roomMgr.GetMemberPos(room.ID, charID)
-			bulletID := c.roomMgr.NextBulletID(room.ID)
-			skills := c.roomMgr.GetMemberSkills(room.ID, charID)
-			template := uint32(1)
-			switch req.SlotNo {
-			case 1:
-				if skills[0] != 0 {
-					template = skills[0]
-				}
-			case 2:
-				if skills[1] != 0 {
-					template = skills[1]
-				}
-			case 3:
-				if skills[3] != 0 {
-					template = skills[3]
+			tankID := c.roomMgr.GetMemberTank(room.ID, charID)
+			cfg := game.GetTankConfig(tankID)
+			var mpCost int32
+			if cfg != nil {
+				switch req.SlotNo {
+				case 1:
+					mpCost = cfg.Skills[0].MPCost
+				case 2:
+					mpCost = cfg.Skills[1].MPCost
+				case 3, 10:
+					mpCost = cfg.Skills[3].MPCost
 				}
 			}
-			fireFrame := protocol.EncodeSyncSceneFire(bulletID, charID, startX, startY, req.DestX, req.DestY, 600, template)
-			c.broadcast.SendToAll(room.Members, 0, fireFrame)
-			log.Printf("[%s] player %d fired bullet %d (slot=%d, template=%d) from (%d,%d) to (%d,%d)", c.role, charID, bulletID, req.SlotNo, template, startX, startY, req.DestX, req.DestY)
+			if mpCost > 0 && room.Battle != nil && !room.Battle.HasEnoughMP(charID, mpCost) {
+				return nil
+			}
+			beh := c.roomMgr.GetMemberBehavior(room.ID, charID, tankID)
+			var walls []game.WallRect
+			if room.Battle != nil {
+				walls = room.Battle.Walls
+			}
+			ctx := &game.ActorContext{
+				RoomID:  room.ID,
+				ActorID: charID,
+				TankID:  tankID,
+				Camp:    c.roomMgr.GetMemberCamp(room.ID, charID),
+				PosX:    startX,
+				PosY:    startY,
+				Config:  cfg,
+				Walls:   walls,
+			}
+			if room.Battle != nil {
+				room.Battle.BehaviorMu.Lock()
+			}
+			res := beh.OnUseSkill(ctx, req.SlotNo, req.TargetID, req.DestX, req.DestY)
+			if room.Battle != nil {
+				room.Battle.BehaviorMu.Unlock()
+			}
+			if mpCost > 0 && room.Battle != nil && (len(res.Fires) > 0 || len(res.Skills) > 0 || len(res.AreaHits) > 0 || len(res.Moves) > 0 || len(res.Buffs) > 0) {
+				if newMP, ok := room.Battle.ConsumeMP(charID, mpCost); ok {
+					c.broadcast.SendToAll(room.Members, 0, protocol.EncodeSyncSceneMP([]struct {
+						ObjID uint32
+						MP    int32
+					}{{charID, newMP}}))
+				}
+			}
+			c.dispatchActionResult(room, charID, tankID, req.SlotNo, res)
 		}
 		return nil
 
 	case protocol.MsgRequestExitBattleEnd:
-		log.Printf("[%s] exit battle end requested", c.role)
+		var exitType uint8 = 2 // 2=return to room, 3=exit to lobby/hall
+		if len(body) >= 1 {
+			exitType = body[0]
+		}
+		log.Printf("[%s] exit battle end requested (m_type=%d)", c.role, exitType)
 		charID := uint32(0)
 		if c.session != nil && c.session.Character != nil {
 			charID = c.session.Character.CharID
@@ -690,11 +774,69 @@ func (c *WSConn) handleFrame(frame []byte) error {
 		if room == nil && charID != 0 {
 			room = c.roomMgr.FindRoomByMember(charID)
 		}
+		exitFrame := protocol.EncodeNotifyExitBattle(0, 0, charID, uint32(exitType), 0)
 		if room != nil {
+			// If battle is still running, handle mid-battle leave
+			if room.Battle != nil && !room.Battle.IsFinished() {
+				// Mark this player as dead (forfeit)
+				if s := room.Battle.GetMemberState(charID); s != nil {
+					s.Alive = false
+					s.RespawnAt = 0 // no respawn for quitters
+				}
+				// Check if entire team has left → other team wins
+				leaverCamp := c.roomMgr.GetMemberCamp(room.ID, charID)
+				_, newOwner := c.roomMgr.RemoveMemberWithTransfer(charID)
+				c.roomID = 0
+
+				// Check remaining members per camp
+				remainingMembers := c.roomMgr.GetMembers(room.ID)
+				campAlive := [3]bool{}
+				for _, mid := range remainingMembers {
+					mc := c.roomMgr.GetMemberCamp(room.ID, mid)
+					campAlive[mc] = true
+				}
+				opFrame := protocol.EncodeNotifyRoomOp(1, charID, 0)
+				c.broadcast.SendToAll(remainingMembers, 0, opFrame)
+				if newOwner != 0 {
+					ownerFrame := protocol.EncodeNotifyRoomOp(26, newOwner, newOwner)
+					c.broadcast.SendToAll(remainingMembers, 0, ownerFrame)
+					log.Printf("[%s] transferred room %d ownership to %d", c.role, room.ID, newOwner)
+				}
+
+				if !campAlive[leaverCamp] {
+					// All members of leaverCamp gone → other team wins
+					winner := uint8(3 - leaverCamp)
+					room.Battle.ForceEnd(winner)
+					log.Printf("[battle] 🏳️ camp%d all left, camp%d wins by forfeit", leaverCamp, winner)
+				}
+				return c.Send(exitFrame)
+			}
+
+			// Battle already finished (settlement screen)
 			room.State = 0
 			c.roomMgr.ResetLoaded(room.ID)
+			if exitType == 3 {
+				// THOÁT → exit to lobby/hall and leave room
+				_, newOwner := c.roomMgr.RemoveMemberWithTransfer(charID)
+				c.roomID = 0
+				remaining := c.roomMgr.GetMembers(room.ID)
+				if len(remaining) > 0 {
+					opFrame := protocol.EncodeNotifyRoomOp(1, charID, 0)
+					c.broadcast.SendToAll(remaining, 0, opFrame)
+					if newOwner != 0 {
+						ownerFrame := protocol.EncodeNotifyRoomOp(26, newOwner, newOwner)
+						c.broadcast.SendToAll(remaining, 0, ownerFrame)
+						log.Printf("[%s] transferred room %d ownership to %d", c.role, room.ID, newOwner)
+					}
+				}
+				return c.Send(exitFrame)
+			}
+			// VỀ → return to room (stay in room, broadcast 1707 so others see "%d đã về")
+			members := c.roomMgr.GetMembers(room.ID)
+			c.broadcast.SendToAll(members, 0, exitFrame)
+			return nil
 		}
-		return nil
+		return c.Send(exitFrame)
 
 	default:
 		log.Printf("[%s] unhandled msg %d (%d bytes)", c.role, msgID, len(body))
@@ -702,7 +844,6 @@ func (c *WSConn) handleFrame(frame []byte) error {
 	}
 }
 
-// handleVersion handles message 52 → responds with 903
 func (c *WSConn) handleVersion(body []byte) error {
 	msg, err := protocol.DecodeRequestProtocolVersion(body)
 	if err != nil {
@@ -1026,91 +1167,3 @@ func (c *WSConn) buildCharBrief(camp uint8) []byte {
 	return protocol.EncodeRoomCharBrief(p.CharID, p.CharUuid, p.Name, p.Level, avID, tankID, tankLvl, extID, camp)
 }
 
-// startBattle transitions all players in a room into the battle arena.
-func (c *WSConn) startBattle(room *game.Room) {
-	members := c.roomMgr.GetMembers(room.ID)
-	log.Printf("[battle] ⚔️ starting battle for room %d (map=%d, %d members: %v)", room.ID, room.MapID, len(members), members)
-
-	// Gather TankBattleInfo for all members
-	tanks := make([]*protocol.TankBattleInfo, 0, len(members))
-	for idx, mid := range members {
-		char := c.store.GetCharacter(mid)
-		name := fmt.Sprintf("Player_%d", mid)
-		var tankLvl uint8 = 1
-		var activeTankID uint32 = 10000019
-		if char != nil {
-			name = char.Name
-			var activeTank *game.PlayerTank
-			for i := range char.Tanks {
-				if char.Tanks[i].ExtFlag&2 != 0 {
-					activeTank = &char.Tanks[i]
-					break
-				}
-			}
-			if activeTank == nil && len(char.Tanks) > 0 {
-				activeTank = &char.Tanks[0]
-			}
-			if activeTank != nil {
-				tankLvl = activeTank.TankLevel
-				activeTankID = activeTank.TankID
-			}
-		}
-
-		tankSkills := game.GetTankSkills(activeTankID)
-		c.roomMgr.SetMemberSkills(room.ID, mid, tankSkills)
-
-		camp := c.roomMgr.GetMemberCamp(room.ID, mid)
-
-		var spawnX int16 = 250
-		if camp == 2 {
-			spawnX = 1150
-		}
-		spawnY := int16(350 + (idx%5)*80)
-		c.roomMgr.SetMemberPos(room.ID, mid, spawnX, spawnY)
-
-		tInfo := &protocol.TankBattleInfo{
-			ObjID:       mid, // ObjID matches account_oid so tanks.has(self_id) in Godot client succeeds
-			AcctOid:     mid,
-			X:           spawnX,
-			Y:           spawnY,
-			HP:          1000,
-			MaxHP:       1000,
-			Star:        1,
-			Camp:        camp,
-			Name:        name,
-			LifeCount:   3,
-			BattleExp:   0,
-			BattleLevel: 1,
-			TankLevel:   tankLvl,
-			MP:          100,
-			MaxMP:       100,
-			Shield:      0,
-			Skills:      tankSkills,
-		}
-		tanks = append(tanks, tInfo)
-	}
-
-	now := uint32(time.Now().Unix())
-
-	// For each member, send:
-	// 1. NotifySelfData (1550) - their tank info
-	// 2. NotifyOtherList (1551) - other players' tanks
-	// 3. NotifyBattleEnter (1586) - battle start signal (triggers client.battle.started = true)
-	for _, selfTank := range tanks {
-		var others []*protocol.TankBattleInfo
-		for _, other := range tanks {
-			if other.ObjID != selfTank.ObjID {
-				others = append(others, other)
-			}
-		}
-
-		selfFrame := protocol.EncodeNotifySelfData(selfTank)
-		otherFrame := protocol.EncodeNotifyOtherList(others)
-		enterFrame := protocol.EncodeNotifyBattleEnter(now, 0)
-
-		c.broadcast.SendTo(selfTank.ObjID, selfFrame)
-		c.broadcast.SendTo(selfTank.ObjID, otherFrame)
-		c.broadcast.SendTo(selfTank.ObjID, enterFrame)
-		log.Printf("[battle] sent 1550, 1551, 1586 to player %d (%s, camp=%d)", selfTank.ObjID, selfTank.Name, selfTank.Camp)
-	}
-}

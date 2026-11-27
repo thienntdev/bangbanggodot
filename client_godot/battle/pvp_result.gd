@@ -199,6 +199,9 @@ func _tick(delta: float) -> void :
 		client.impeach_result.connect( func(ret: int) -> void :
 			if is_visible_in_tree() and IMPEACH_TIPS.has(ret):
 				say(str(IMPEACH_TIPS[ret])))
+		client.changed.connect( func() -> void :
+			if is_visible_in_tree():
+				queue_redraw())
 	if pack != null and pack.state == "ready":
 		pack.load_bag()
 		pack.load_garage()
@@ -322,7 +325,7 @@ func _paint() -> void :
 	_tank(o, battle)
 	if not client.room_state.room.is_empty():
 		_fblit("pr_backtip", o + _v(Atlas.NODES["cvsBackTip"]))
-		_label(o, "lblPlayerBackNum", BACK_TIP % 0)
+		_label(o, "lblPlayerBackNum", BACK_TIP % int(battle.back_count))
 	for key: String in ["exit", "back"]:
 		var button: Button = buttons.get(key) as Button
 		if button == null or not button.visible:

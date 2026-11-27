@@ -88,6 +88,7 @@ var sound_cuts: Array = []
 const NARSND1_EARLY: float = 0.12
 var buff_added: Array = []
 var ended: bool = false
+var back_count: int = 0
 var outcome: Dictionary = {}
 var tanks: Dictionary = {}
 var npcs: Dictionary = {}
@@ -380,6 +381,7 @@ func clear() -> void :
 	started = false
 	buff_added.clear()
 	ended = false
+	back_count = 0
 	outcome.clear()
 	tanks.clear()
 	faced.clear()

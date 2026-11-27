@@ -2169,7 +2169,11 @@ func _sheet(path: String, done: Callable, slow: bool = false, tag: String = "") 
 	if _bundle_state == 1:
 		_bundle_wait.append([path, done, slow, tag])
 	elif not bundle.is_empty() and _lv_full(path).is_empty():
-		done.call_deferred(_bundle_read(path))
+		var hit: Variant = _bundle_read(path)
+		if hit != null:
+			done.call_deferred(hit)
+		else:
+			_fetch(path, false, done, false, false, slow, tag)
 	else:
 		_fetch(path, false, done, false, false, slow, tag)
 
