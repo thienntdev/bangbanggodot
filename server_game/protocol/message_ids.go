@@ -128,12 +128,40 @@ const (
 	MsgNotifyStartMatch      int16 = 1719 // S→C: notify match started (pairing timer)
 	MsgNotifyStopMatch       int16 = 1720 // S→C: notify match stopped
 
-	// === Quests ===
-	MsgNotifyAcemList   int16 = 1256  // S→C: achievement list
+	// === Quests & Stages ===
+	MsgRequestQuestComplete  int16 = 280  // C→S: complete quest (u32 questID, u32 choice)
+	MsgRequestQuestOpenUI    int16 = 281  // C→S: quest open UI check (u8 uiID)
+	MsgRequestRandQuestSwitch int16 = 285 // C→S: switch random quest (u32 questID)
+	MsgRequestStageReap      int16 = 74   // C→S: reap stage reward (u32 stageID, u8 show)
+	MsgNotifyQuestList       int16 = 1250 // S→C: quest list (u16 count, [count × 28B], u32 kind)
+	MsgNotifyQuestUpdate     int16 = 1251 // S→C: single quest update (28B)
+	MsgNotifyQuestRemove     int16 = 1252 // S→C: quest removed (u16 count, [count × u32])
+	MsgNotifyQuestFailed     int16 = 1254 // S→C: quest failed (u32 questID)
+	MsgNotifyStageInfo       int16 = 1306 // S→C: stage info (7 × u32)
+	MsgNotifyStageReaped     int16 = 1307 // S→C: stage reaped (u32 result, u32 stageID)
+	MsgNotifyStageClear      int16 = 1308 // S→C: stage cleared (u32 stageID, [u32 extra])
+	MsgNotifyStageProgress   int16 = 1309 // S→C: stage progress (u32 type, u16 count, ...)
+	MsgNotifyAcemList        int16 = 1256 // S→C: achievement list
 
 	// === Honor ===
 	MsgNotifyHonorList  int16 = 1029  // S→C: honor list
 	MsgNotifyHonorEquip int16 = 1028  // S→C: honor equipped
+
+	// === Sign-in (Điểm danh) ===
+	MsgRequestSignToday  int16 = 360  // C→S: sign in today (empty body)
+	MsgRequestSignMark   int16 = 361  // C→S: claim sign-in milestone (u32 days)
+	MsgRequestSignVip    int16 = 362  // C→S: VIP sign in (empty body)
+	MsgRequestCashbackPick int16 = 80 // C→S: cashback pick (empty body)
+	MsgNotifySignInInfo  int16 = 1400 // S→C: sign-in state (7 × u32)
+	MsgNotifyLimitList   int16 = 1045 // S→C: limits list (u16 count, [count × u32 id + s32 value])
+	MsgNotifyVipInfo     int16 = 1049 // S→C: VIP info (5 × u32)
+	MsgNotifyCashbackInfo int16 = 81  // S→C: cashback info (u32 times, u32 picked)
+
+	// === Item Results ===
+	MsgNotifySettleAward  int16 = 1104 // S→C: settle award (award popup with items/coins/exp)
+
+	// === Sell/Swap Items ===
+	MsgRequestSwapItem int16 = 150 // C→S: swap item (u32 cont, s16 origin, s16 dest, s32 count)
 
 	// === Activity ===
 	MsgNotifyActList int16 = 1950  // S→C: activity list (raw binary)
@@ -161,6 +189,57 @@ const (
 	MsgNotifyExitBattle    int16 = 1707  // S→C: exit battle / return to room or lobby
 	MsgNotifyOccupyState   int16 = 1565  // S→C: occupy flag state snapshot
 	MsgNotifyOccupyScore   int16 = 1732  // S→C: occupy flag score increment
+
+	// === Talent ===
+	MsgRequestAddTalentPage  int16 = 420  // C→S: add talent page (utf8 name, u8 buyType)
+	MsgRequestSaveTalentPage int16 = 421  // C→S: save talent page (TALENT_PAGE)
+	MsgRequestOpTalentPage   int16 = 422  // C→S: op talent page (u32 op, utf8 pageUuid, utf8 tankUuid)
+	MsgNotifyUpdateTalentPage int16 = 1450 // S→C: update talent page (u32 op, TALENT_PAGE)
+	MsgNotifyOpTalentPage     int16 = 1451 // S→C: op talent page (u32 op, utf8 pageUuid)
+	MsgNotifyTalentInfo       int16 = 1452 // S→C: talent info (array TALENT_PAGE, u32 total, u8 buyCount)
+	MsgNotifyTalentTotalPoint int16 = 1453 // S→C: talent total point (u32)
+
+	// === Crystal ===
+	MsgRequestCrystalSchemeInfo    int16 = 423  // C→S: request crystal schemes (empty)
+	MsgRequestSaveCrystalScheme    int16 = 424  // C→S: save crystal scheme (124 bytes)
+	MsgRequestRenameCrystalScheme  int16 = 425  // C→S: rename crystal scheme (u32, utf8)
+	MsgRequestCrystalForge         int16 = 426  // C→S: forge/sell crystals (u32, u16, items)
+	MsgRequestSetCurCrystalScheme  int16 = 427  // C→S: set current scheme (u32, utf8)
+	MsgRequestCrystalMake          int16 = 430  // C→S: crystal make/gacha (u32 kind)
+	MsgNotifyCrystalSchemeInfo     int16 = 1454 // S→C: crystal scheme info
+	MsgNotifyCrystalSchemeNames    int16 = 1455 // S→C: crystal scheme names
+	MsgNotifyRenameCrystalResult   int16 = 1457 // S→C: rename result (u32)
+	MsgNotifyUpgradeCrystalResult  int16 = 1459 // S→C: forge result (u32)
+	MsgNotifyCrystalMakeCoolTime   int16 = 1461 // S→C: crystal make cooldown (u32)
+
+	// === Mail ===
+	MsgRequestSendMail       int16 = 270   // C→S: send mail (raw)
+	MsgRequestMailOperate    int16 = 271   // C→S: mail operate (utf8, i32)
+	MsgRequestClaimMailItem  int16 = 272   // C→S: claim mail item (utf8, utf8)
+	MsgNotifyNoReadMailCount int16 = 1230  // S→C: unread count (i32)
+	MsgNotifyMailList        int16 = 1231  // S→C: mail list
+	MsgNotifyMailInsideInfo  int16 = 1232  // S→C: mail inside info
+	MsgNotifyMailOperateResult int16 = 1233 // S→C: mail operate result
+	MsgUpdateMailBriefInfo   int16 = 1234  // S→C: update mail brief
+
+	// === PvE Extended ===
+	MsgRequestSelectTutorMap      int16 = 304  // C→S: select tutor map (u32)
+	MsgRequestResetMapEnterCount  int16 = 306  // C→S: reset map enter count (u32)
+	MsgRequestSweepSoloMap        int16 = 307  // C→S: sweep solo map (u32, u32)
+	MsgRequestPveRecord           int16 = 558  // C→S: request PvE record (u32)
+	MsgNotifyChapterScenes        int16 = 1300 // S→C: chapter scenes
+	MsgUpdateCityInfo             int16 = 1304 // S→C: update city info
+	MsgNotifySweepSoloAward       int16 = 1305 // S→C: sweep awards
+	MsgNotifyPveRecord            int16 = 1516 // S→C: PvE record
+	MsgNotifyUpdateCharData       int16 = 85   // S→C: update char data
+	MsgNotifyThew                 int16 = 1027 // S→C: stamina
+	MsgRequestBuyThew             int16 = 78   // C→S: buy stamina
+
+	// === Ranked ===
+	MsgNotifyRankedInfo           int16 = 1156 // S→C: ranked info (placeholder)
+
+	// === System Bulletin ===
+	MsgSystemBulletinNotify       int16 = 3502 // S→C: system bulletin
 
 	// === Room ===
 	MsgRoomList int16 = 2203  // S→C: room list

@@ -18,6 +18,14 @@ const (
 	BuffEffectAttrMod     int32 = 201 // Attribute modifier (TypeParam selects attribute)
 )
 
+// Buff effect types for per-school immunity and projectile blocking.
+const (
+	BuffEffectSchoolImmune int32 = 25 // Per-school damage immunity (TypeParam: 1=phys,2=energy,3=true)
+	BuffEffectStealth      int32 = 26 // Stealth / invisibility
+	BuffEffectProjBlock    int32 = 40 // Block incoming projectiles (EffectValB: 0=all,1=basic-only)
+	BuffEffectProjReflect  int32 = 41 // Reflect incoming projectiles back at attacker
+)
+
 // Attribute TypeParam constants for EffectType == 201 (matching battle_runtime.py).
 const (
 	AttrAllAtk        int32 = 1
@@ -34,6 +42,103 @@ const (
 	AttrSkillDmgTaken int32 = 20
 	AttrHealMod       int32 = 21
 )
+
+// ----- Per-school Immunity Buff Templates -----
+// Python ref: TankActions.damage_immune() checks specific buff templates per school.
+var schoolImmunePhysical = map[uint32]bool{332205: true}  // immune physical only
+var schoolImmuneEnergy = map[uint32]bool{333301: true}    // immune energy only
+var schoolImmuneTrue = map[uint32]bool{330305: true}      // immune true only
+var schoolImmuneAll = map[uint32]bool{                    // immune all damage
+	323401: true, 382121: true, 334212: true, 341401: true, 318402: true,
+	351401: true, // Saitama block
+}
+
+// ----- Projectile Block/Reflect Buff Templates -----
+// Python ref: TankActions.projectile_blocked()
+var projBlockAll = map[uint32]bool{351401: true, 323401: true, 382121: true, 334212: true, 341401: true, 318402: true}
+var projBlockBasicOnly = map[uint32]bool{332206: true} // Luffy: block basic attacks only
+var projReflect = map[uint32]bool{386111: true}        // Tsubasa/Kakashi: reflect projectile
+
+// IsSchoolImmuneLocked checks if the target has a per-school damage immunity buff active.
+// Python ref: TankActions.damage_immune() checks specific buff template IDs per school.
+func IsSchoolImmuneLocked(s *MemberState, school string, nowMS int64) bool {
+	if s == nil || s.ActiveBuffs == nil {
+		return false
+	}
+	for _, b := range s.ActiveBuffs {
+		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
+			continue
+		}
+		tid := b.TemplateID
+		// Generic all-school immunity
+		if schoolImmuneAll[tid] {
+			return true
+		}
+		switch school {
+		case "physical":
+			if schoolImmunePhysical[tid] {
+				return true
+			}
+		case "energy":
+			if schoolImmuneEnergy[tid] {
+				return true
+			}
+		case "true":
+			if schoolImmuneTrue[tid] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CheckProjectileBlockedLocked checks if the target has a buff that blocks or reflects projectiles.
+// Returns (blocked, reflected). If reflected, the caller should create a new bullet aimed at the attacker.
+// Python ref: TankActions.projectile_blocked()
+func CheckProjectileBlockedLocked(s *MemberState, isBasic bool, nowMS int64) (blocked bool, reflected bool) {
+	if s == nil || s.ActiveBuffs == nil {
+		return false, false
+	}
+	for _, b := range s.ActiveBuffs {
+		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
+			continue
+		}
+		tid := b.TemplateID
+		// Reflect takes priority (Tsubasa/Kakashi)
+		if projReflect[tid] {
+			return true, true
+		}
+		// Full block (Saitama, etc.)
+		if projBlockAll[tid] {
+			return true, false
+		}
+		// Basic-attack-only block (Luffy)
+		if isBasic && projBlockBasicOnly[tid] {
+			return true, false
+		}
+	}
+	return false, false
+}
+
+// WoundReductionsLocked returns a slice of heal-reduction factors from active DoT debuffs.
+// Each active DoT (EffectType 27 with negative EffectValA = damage) applies 0.30 wound reduction.
+// Python ref: combat_math.heal() applies wound_reduction for each active DoT on target.
+func WoundReductionsLocked(s *MemberState, nowMS int64) []float64 {
+	if s == nil || s.ActiveBuffs == nil {
+		return nil
+	}
+	var wounds []float64
+	for _, b := range s.ActiveBuffs {
+		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
+			continue
+		}
+		if b.EffectType == BuffEffectPeriodic && b.EffectValA < 0 {
+			// Active DoT → 30% heal reduction
+			wounds = append(wounds, 0.30)
+		}
+	}
+	return wounds
+}
 
 // ActiveBuff tracks an active buff or debuff on a battle actor.
 type ActiveBuff struct {
@@ -597,12 +702,17 @@ func (bs *BattleState) applyPeriodicBuffTickLocked(memberID uint32, state *Membe
 		return
 	}
 	if val > 0 {
-		// HoT heal
+		// HoT heal — apply wound reductions from active DoTs
 		healMod := 1.0 + AttrBonusLocked(state, now, AttrHealMod)
 		if healMod < 0 {
 			healMod = 0
 		}
-		healAmt := int32(math.Round(val * healMod))
+		wounds := WoundReductionsLocked(state, now)
+		healAmt := int32(CalculateHeal(HealParams{
+			Raw:             val,
+			IncomingBonus:   healMod - 1.0,
+			WoundReductions: wounds,
+		}))
 		if healAmt <= 0 || state.HP >= state.MaxHP {
 			return
 		}
@@ -625,7 +735,7 @@ func (bs *BattleState) applyPeriodicBuffTickLocked(memberID uint32, state *Membe
 		return
 	}
 	var immune bool
-	dmg, immune = applyDefenseModifiers(state, dmg, now)
+	dmg, immune = applyDefenseModifiers(state, dmg, now, "") // DoT has no school for per-school immunity
 	if immune || dmg <= 0 {
 		return
 	}

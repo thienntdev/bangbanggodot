@@ -147,6 +147,14 @@ type ActorContext struct {
 	Bounds  ArenaBounds
 }
 
+// ArenaBounds defines playable arena boundaries for tank movement and skill clamping.
+type ArenaBounds struct {
+	Left   int16
+	Top    int16
+	Right  int16
+	Bottom int16
+}
+
 // ActorBehavior defines lifecycle and combat hooks for any battle entity (Tank, Mob, Boss).
 // Custom implementations should embed DefaultBehavior so they only override what they need.
 type ActorBehavior interface {

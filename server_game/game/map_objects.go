@@ -10,28 +10,18 @@ import (
 	"strconv"
 )
 
-// isOrdinaryTemplate returns true for plain destructible obstacle templates
-// that should be neutral (camp=0) regardless of map placement camp.
-// Matches Python map_objects.py ORDINARY_TEMPLATES.
-func isOrdinaryTemplate(tplID uint32) bool {
-	if (tplID >= 2000 && tplID <= 2041) || (tplID >= 3004 && tplID <= 3009) {
-		return true
-	}
-	return tplID == 5030 || tplID == 5031 || tplID == 9003
-}
-
 // MapNPC represents a destructible map object (obstacle, turret, repair box, base).
 type MapNPC struct {
-	ID       uint32  // (14<<24) | instanceID — matches client 234881024|inst
-	Template uint32  // NpcTemplate ID
-	X        int16   // center X
-	Y        int16   // center Y
-	HP       int32   // current HP
-	MaxHP    int32   // max HP
-	Camp     uint8   // 0=neutral, 1=camp1, 2=camp2
-	Width    int16   // collision width
-	Height   int16   // collision height
-	Type     int     // iType: 1=obstacle, 3=base, 4=turret, 6=repair box
+	ID       uint32 // (14<<24) | instanceID — matches client 234881024|inst
+	Template uint32 // NpcTemplate ID
+	X        int16  // center X
+	Y        int16  // center Y
+	HP       int32  // current HP
+	MaxHP    int32  // max HP
+	Camp     uint8  // 0=neutral, 1=camp1, 2=camp2
+	Width    int16  // collision width
+	Height   int16  // collision height
+	Type     int    // iType: 1=obstacle, 3=base, 4=turret, 6=repair box
 	Alive    bool
 
 	// Active repair state for iType=6 HP boxes
@@ -159,10 +149,8 @@ func LoadMapNPCs(staticDir string, mapID uint32) map[uint32]*MapNPC {
 			}
 			id := uint32(npcKindShift) | npc.InstanceID
 			camp := npc.Camp
-			// Ordinary obstacles (plain destructible scenery) are neutral (camp=0)
-			// so bullets from both teams can destroy them — matching Python map_objects.py.
-			// Non-ordinary type-1 objects (defensive walls around turrets) keep their camp.
-			if tpl.Type == 1 && isOrdinaryTemplate(npc.TemplateID) {
+			// Ordinary obstacles (iType=1) are neutral (camp=0)
+			if tpl.Type == 1 {
 				camp = 0
 			}
 			fireInterval := tpl.FireInterval
@@ -257,10 +245,7 @@ func parseInt32(v interface{}) int32 {
 
 // CheckBulletNPCCollisionSegment checks if the segment (x1,y1)->(x2,y2) hits any alive NPC.
 // Returns the earliest hit NPC and fraction along the segment, or nil if no hit.
-// bulletOwnerID is used to detect NPC-fired bullets (turrets): they have 0x50000000 prefix
-// and should pass through type-1 destructible obstacles.
-func CheckBulletNPCCollisionSegment(npcs map[uint32]*MapNPC, x1, y1, x2, y2 float64, bulletCamp uint8, bulletOwnerID uint32) (*MapNPCHitResult, float64) {
-	isNPCBullet := bulletOwnerID&0x50000000 != 0
+func CheckBulletNPCCollisionSegment(npcs map[uint32]*MapNPC, x1, y1, x2, y2 float64, bulletCamp uint8) (*MapNPCHitResult, float64) {
 	var best *MapNPCHitResult
 	bestFrac := 2.0
 	for _, npc := range npcs {
@@ -268,10 +253,6 @@ func CheckBulletNPCCollisionSegment(npcs map[uint32]*MapNPC, x1, y1, x2, y2 floa
 			continue
 		}
 		if npc.Camp != 0 && npc.Camp == bulletCamp {
-			continue
-		}
-		// Turret/NPC bullets pass through type-1 destructible obstacles
-		if isNPCBullet && npc.Type == 1 {
 			continue
 		}
 		halfW := float64(npc.Width) / 2.0
@@ -282,12 +263,11 @@ func CheckBulletNPCCollisionSegment(npcs map[uint32]*MapNPC, x1, y1, x2, y2 floa
 		if halfH <= 0 {
 			halfH = 36
 		}
-		// Expand slightly by bullet radius (12px) so bullet edge contact also hits reliably
 		w := WallRect{
-			Left:   float64(npc.X) - halfW - 12.0,
-			Top:    float64(npc.Y) - halfH - 12.0,
-			Right:  float64(npc.X) + halfW + 12.0,
-			Bottom: float64(npc.Y) + halfH + 12.0,
+			Left:   float64(npc.X) - halfW,
+			Top:    float64(npc.Y) - halfH,
+			Right:  float64(npc.X) + halfW,
+			Bottom: float64(npc.Y) + halfH,
 		}
 		if hit, frac := segmentHitsSingleRect(w, x1, y1, x2, y2); hit && frac < bestFrac {
 			bestFrac = frac
@@ -410,23 +390,15 @@ type WallRect struct {
 	Left, Top, Right, Bottom float64
 }
 
-// ArenaBounds represents the playable tank bounds (inset by TankMoveHalf from outer walls).
-// Matches Python battle_map.py bounds / combat_geometry._tank_bounds.
-type ArenaBounds struct {
-	Left, Top, Right, Bottom int16
-}
-
 // MapWalls holds the two sets of wall rectangles loaded from a map:
 //   - BulletWalls: blocks bullets (solid walls only, instanceId == -1 and chunk-1 blocks)
 //   - MovementWalls: blocks tank movement (solid walls + water grids, instanceId == -1 or -2)
-//   - Bounds: playable area for tank clamping (computed from outer walls)
 //
 // Python reference: battle_map.py uses self.walls (bullets) vs self.movement_walls (movement).
 // Water grids (instanceId == -2) block vehicle movement but let bullets pass through.
 type MapWalls struct {
 	BulletWalls   []WallRect
 	MovementWalls []WallRect
-	Bounds        ArenaBounds
 }
 
 // LoadMapWalls loads wall rectangles from map.json and separates them into
@@ -440,8 +412,7 @@ func LoadMapWalls(staticDir string, mapID uint32) MapWalls {
 	}
 	var doc struct {
 		Header struct {
-			MapWidth  int `json:"mapWidth"`
-			MapHeight int `json:"mapHeight"`
+			MapWidth int `json:"mapWidth"`
 		} `json:"header"`
 		Chunks []struct {
 			Tag  int             `json:"tag"`
@@ -456,11 +427,10 @@ func LoadMapWalls(staticDir string, mapID uint32) MapWalls {
 		if chunk.Tag == 1 {
 			var chunkData struct {
 				Blocks []struct {
-					BlockType int     `json:"blockType"`
-					CenterX   float64 `json:"centerX"`
-					CenterY   float64 `json:"centerY"`
-					Width     float64 `json:"width"`
-					Height    float64 `json:"height"`
+					CenterX float64 `json:"centerX"`
+					CenterY float64 `json:"centerY"`
+					Width   float64 `json:"width"`
+					Height  float64 `json:"height"`
 				} `json:"blocks"`
 			}
 			if err := json.Unmarshal(chunk.Data, &chunkData); err == nil {
@@ -468,19 +438,12 @@ func LoadMapWalls(staticDir string, mapID uint32) MapWalls {
 					if b.Width <= 0 || b.Height <= 0 {
 						continue
 					}
-					rect := WallRect{
+					bulletWalls = append(bulletWalls, WallRect{
 						Left:   b.CenterX - b.Width/2.0,
 						Top:    b.CenterY - b.Height/2.0,
 						Right:  b.CenterX + b.Width/2.0,
 						Bottom: b.CenterY + b.Height/2.0,
-					}
-					if b.BlockType == -2 {
-						// Low wall / fence / water: blocks movement only, bullets pass through
-						movementOnly = append(movementOnly, rect)
-					} else {
-						// Solid wall (blockType == -1 or default): blocks both bullets and movement
-						bulletWalls = append(bulletWalls, rect)
-					}
+					})
 				}
 			}
 		} else if chunk.Tag == 6 && doc.Header.MapWidth >= 24 {
@@ -530,55 +493,7 @@ func LoadMapWalls(staticDir string, mapID uint32) MapWalls {
 
 	log.Printf("[map_objects] loaded %d bullet walls + %d water walls = %d movement walls for map %d",
 		len(bulletWalls), len(movementOnly), len(moveWalls), mapID)
-
-	// Compute tank bounds from outer wall rectangles.
-	// Matches Python combat_geometry._tank_bounds / battle_map.py self.bounds.
-	// Outer walls span the full height (top=0, bottom=mapHeight) or full width
-	// (left<=outerLeft, right>=outerRight) of the map.
-	mapW := float64(doc.Header.MapWidth)
-	mapH := float64(doc.Header.MapHeight)
-	const half = 36.0 // TankMoveHalf
-	bounds := ArenaBounds{Left: int16(half), Top: int16(half), Right: int16(mapW - half), Bottom: int16(mapH - half)}
-	if mapW > 0 && mapH > 0 {
-		// Find left outer wall: max(r) where l==0 and t==0 and b==mapHeight
-		outerLeft := 0.0
-		for _, w := range bulletWalls {
-			if w.Left == 0 && w.Top == 0 && w.Bottom == mapH && w.Right > outerLeft {
-				outerLeft = w.Right
-			}
-		}
-		// Find right outer wall: min(l) where r==mapWidth and t==0 and b==mapHeight
-		outerRight := mapW
-		for _, w := range bulletWalls {
-			if w.Right == mapW && w.Top == 0 && w.Bottom == mapH && w.Left < outerRight {
-				outerRight = w.Left
-			}
-		}
-		// Find top outer wall: max(b) where t==0 and l<=outerLeft and r>=outerRight
-		outerTop := 0.0
-		for _, w := range bulletWalls {
-			if w.Top == 0 && w.Left <= outerLeft && w.Right >= outerRight && w.Bottom > outerTop {
-				outerTop = w.Bottom
-			}
-		}
-		// Find bottom outer wall: min(t) where b==mapHeight and l<=outerLeft and r>=outerRight
-		outerBottom := mapH
-		for _, w := range bulletWalls {
-			if w.Bottom == mapH && w.Left <= outerLeft && w.Right >= outerRight && w.Top < outerBottom {
-				outerBottom = w.Top
-			}
-		}
-		bounds = ArenaBounds{
-			Left:   int16(outerLeft + half),
-			Top:    int16(outerTop + half),
-			Right:  int16(outerRight - half),
-			Bottom: int16(outerBottom - half),
-		}
-		log.Printf("[map_objects] map %d bounds: left=%d top=%d right=%d bottom=%d (outer: l=%.0f t=%.0f r=%.0f b=%.0f)",
-			mapID, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom, outerLeft, outerTop, outerRight, outerBottom)
-	}
-
-	return MapWalls{BulletWalls: bulletWalls, MovementWalls: moveWalls, Bounds: bounds}
+	return MapWalls{BulletWalls: bulletWalls, MovementWalls: moveWalls}
 }
 
 // NPCMovementWalls builds additional movement wall rects from alive NPC bounding boxes.

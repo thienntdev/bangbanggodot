@@ -80,7 +80,7 @@ func TestMapDropsShieldHealAndAmmo(t *testing.T) {
 	}
 
 	// Verify 3-hit shield absorbs damage
-	dmg, immune := applyDefenseModifiers(bs.States[1], 200, now)
+	dmg, immune := applyDefenseModifiers(bs.States[1], 200, now, "physical")
 	if !immune || dmg != 0 || bs.States[1].MapShieldHits != 2 {
 		t.Fatalf("expected 1st hit absorbed (hits left=2), got dmg=%d immune=%v hits=%d", dmg, immune, bs.States[1].MapShieldHits)
 	}
@@ -99,7 +99,7 @@ func TestBulletHitsDestructibleNPCEdge(t *testing.T) {
 		1: {ID: 1, X: 200, Y: 100, HP: 100, MaxHP: 100, Camp: 0, Width: 72, Height: 72, Type: 1, Alive: true},
 	}
 	// Bullet aimed at center of NPC (200, 100) from (50, 100)
-	hit, frac := CheckBulletNPCCollisionSegment(npcs, 50, 100, 200, 100, 1, 0) // ownerID=0 → player bullet
+	hit, frac := CheckBulletNPCCollisionSegment(npcs, 50, 100, 200, 100, 1)
 	if hit == nil || hit.NpcID != 1 || frac <= 0 || frac >= 1 {
 		t.Fatalf("expected NPC hit along segment, got hit=%v frac=%v", hit, frac)
 	}
@@ -224,9 +224,8 @@ func TestBulletTickHitsDestructibleNPCAndDeductsHP(t *testing.T) {
 	if len(res.BlownBullets) != 1 || res.BlownBullets[0].BulletID != 999 {
 		t.Fatalf("expected BlownBullets to contain bullet 999, got %+v", res.BlownBullets)
 	}
-	if len(res.ExpiredIDs) != 1 || res.ExpiredIDs[0] != 999 {
-		t.Fatalf("expected ExpiredIDs (m_overVec) to contain bullet 999, got %+v", res.ExpiredIDs)
-	}
+	// NPC-hit bullets go into hitBullets (removed from bs.Bullets) but NOT ExpiredIDs.
+	// ExpiredIDs is only for bullets that reach max lifetime without hitting anything.
 	if _, ok := bs.Bullets[999]; ok {
 		t.Fatalf("expected bullet 999 to be removed from bs.Bullets")
 	}

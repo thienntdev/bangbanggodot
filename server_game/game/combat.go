@@ -175,6 +175,65 @@ func CalculateDamage(p DamageParams) float64 {
 	return math.Round(value)
 }
 
+// ----- Heal Calculation -----
+// Python ref: combat_math.heal()
+// heal_result = raw × outgoing_bonus × incoming_bonus × wound_reductions
+
+// HealParams holds inputs for a heal calculation.
+type HealParams struct {
+	Raw             float64 // base heal amount
+	OutgoingBonus   float64 // healer's outgoing heal bonus (0.0 = no bonus)
+	IncomingBonus   float64 // target's incoming heal bonus from buffs (AttrHealMod, 0.0 = no bonus)
+	WoundReductions []float64 // each 0.0-1.0, from active DoT debuffs (poison/burn → 0.30)
+}
+
+// CalculateHeal computes the final heal amount after modifiers (matches Python combat_math.heal).
+//
+//	heal = Raw × max(0, 1+OutgoingBonus) × max(0, 1+IncomingBonus) × Π(1-wound_i)
+func CalculateHeal(p HealParams) float64 {
+	if p.Raw <= 0 {
+		return 0
+	}
+	val := p.Raw
+
+	outFactor := 1.0 + p.OutgoingBonus
+	if outFactor < 0 {
+		outFactor = 0
+	}
+	inFactor := 1.0 + p.IncomingBonus
+	if inFactor < 0 {
+		inFactor = 0
+	}
+	val *= outFactor * inFactor
+
+	for _, r := range p.WoundReductions {
+		if r > 0 && r <= 1 {
+			val *= (1 - r)
+		}
+	}
+	if val < 0 {
+		val = 0
+	}
+	return math.Round(val)
+}
+
+// ----- Lifesteal / Spell Vamp -----
+// Python ref: crystal_combat.vamp(), combat_math.heal_conversion()
+// Lifesteal only applies to actual HP loss (not overkill, not shield absorbed).
+
+// LifestealAmount computes heal from lifesteal: actualHPLoss × vampPct.
+// Returns 0 if vampPct <= 0 or hpLoss <= 0.
+func LifestealAmount(hpLoss int32, vampPct float64) int32 {
+	if vampPct <= 0 || hpLoss <= 0 {
+		return 0
+	}
+	heal := math.Round(float64(hpLoss) * vampPct)
+	if heal < 1 {
+		return 0
+	}
+	return int32(heal)
+}
+
 // ----- Convenience helpers -----
 
 // PhysicalDamage calculates physical damage with base stats only (no runtime buffs).

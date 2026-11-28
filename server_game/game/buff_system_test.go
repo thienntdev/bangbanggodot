@@ -97,9 +97,11 @@ func TestPeriodicDoTAndHoT(t *testing.T) {
 	bs.mu.Lock()
 	bs.tickBuffs(now+2000, &res2)
 	bs.mu.Unlock()
-	// At now+2000: DoT ticks (-120 -> 760) AND HoT ticks (+125 -> 885)
-	if bs.States[2].HP != 885 {
-		t.Fatalf("expected HP 885 after DoT(-120) and HoT(+125), got %d", bs.States[2].HP)
+	// At now+2000: DoT ticks (-120 -> 760) AND HoT ticks.
+	// HoT raw=125, but active DoT applies 30% wound reduction: round(125*0.70) = 88
+	// Net: 880 - 120 + 88 = 848
+	if bs.States[2].HP != 848 {
+		t.Fatalf("expected HP 848 after DoT(-120) and HoT(125*0.70=88), got %d", bs.States[2].HP)
 	}
 }
 

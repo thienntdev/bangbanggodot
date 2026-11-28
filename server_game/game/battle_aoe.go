@@ -127,7 +127,7 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 			damage = 1
 		}
 		var immune bool
-		damage, immune = applyDefenseModifiers(state, damage, now)
+		damage, immune = applyDefenseModifiers(state, damage, now, ev.School)
 		if immune {
 			continue
 		}

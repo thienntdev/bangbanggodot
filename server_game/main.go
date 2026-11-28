@@ -75,6 +75,32 @@ func main() {
 	roomMgr.StaticDir, _ = filepath.Abs(*staticDir)
 	onlineMgr := game.NewOnlineTracker()
 	broadcast := game.NewBroadcaster()
+	questMgr := game.NewQuestManager()
+	signMgr := game.NewSignInManager()
+	talentMgr := game.NewTalentManager()
+	crystalMgr := game.NewCrystalManager()
+	mailMgr := game.NewMailManager()
+	pveMgr := game.NewPveManager()
+
+	// --- Shop Catalog path ---
+	catalogPath := "normal_shop_catalog.json"
+	if _, err := os.Stat(catalogPath); err != nil {
+		catalogPath = filepath.Join("..", "BangBang_Offline", "server", "normal_shop_catalog.json")
+	}
+
+	// --- Item Catalog (gift box, presents & sign-in definitions) ---
+	absStatic, _ := filepath.Abs(*staticDir)
+	itemCatalog := game.NewItemCatalog()
+	if err := itemCatalog.LoadCatalog(catalogPath); err != nil {
+		log.Printf("[catalog] ⚠️ Could not load catalog: %v (gift boxes will not work)", err)
+	}
+	if err := itemCatalog.LoadBagJSON(filepath.Join(absStatic, "godot", "a", "l", "bag.json")); err != nil {
+		log.Printf("[catalog] ⚠️ Could not load bag.json: %v", err)
+	}
+	if err := itemCatalog.LoadEventsJSON(filepath.Join(absStatic, "godot", "a", "l", "events.json")); err != nil {
+		log.Printf("[catalog] ⚠️ Could not load events.json: %v", err)
+	}
+
 	authHandler := &handler.AuthHandler{Store: store}
 	mux.Handle("/api/auth", authHandler)
 
@@ -84,10 +110,6 @@ func main() {
 	mux.Handle("/api/register", regHandler)
 
 	// --- Shop Catalog API ---
-	catalogPath := "normal_shop_catalog.json"
-	if _, err := os.Stat(catalogPath); err != nil {
-		catalogPath = filepath.Join("..", "BangBang_Offline", "server", "normal_shop_catalog.json")
-	}
 	shopHandler := handler.NewShopHandler(catalogPath)
 	mux.Handle("/goodsshopquery.php", shopHandler)
 	mux.Handle("/cshopquery.php", shopHandler)
@@ -100,17 +122,16 @@ func main() {
 
 	// --- WebSocket endpoints ---
 	mux.HandleFunc("/ws/login", func(w http.ResponseWriter, r *http.Request) {
-		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, "login")
+		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, questMgr, signMgr, talentMgr, crystalMgr, mailMgr, pveMgr, itemCatalog, "login")
 	})
 	mux.HandleFunc("/ws/gate", func(w http.ResponseWriter, r *http.Request) {
-		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, "gate")
+		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, questMgr, signMgr, talentMgr, crystalMgr, mailMgr, pveMgr, itemCatalog, "gate")
 	})
 	mux.HandleFunc("/ws/comm", func(w http.ResponseWriter, r *http.Request) {
-		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, "gate") // comm uses same handler
+		wsHandle(w, r, store, roomMgr, onlineMgr, broadcast, questMgr, signMgr, talentMgr, crystalMgr, mailMgr, pveMgr, itemCatalog, "gate") // comm uses same handler
 	})
 
 	// --- Static file server for game assets ---
-	absStatic, _ := filepath.Abs(*staticDir)
 	log.Printf("[static] serving %s", absStatic)
 	game.InitTankConfigs(absStatic)
 	mux.Handle("/godot/", http.StripPrefix("/godot/", http.FileServer(http.Dir(filepath.Join(absStatic, "godot")))))
@@ -125,7 +146,7 @@ func main() {
 	}
 }
 
-func wsHandle(w http.ResponseWriter, r *http.Request, store *game.Store, roomMgr *game.RoomManager, onlineMgr *game.OnlineTracker, broadcast *game.Broadcaster, role string) {
+func wsHandle(w http.ResponseWriter, r *http.Request, store *game.Store, roomMgr *game.RoomManager, onlineMgr *game.OnlineTracker, broadcast *game.Broadcaster, questMgr *game.QuestManager, signMgr *game.SignInManager, talentMgr *game.TalentManager, crystalMgr *game.CrystalManager, mailMgr *game.MailManager, pveMgr *game.PveManager, itemCatalog *game.ItemCatalog, role string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[%s] upgrade error: %v", role, err)
@@ -134,7 +155,7 @@ func wsHandle(w http.ResponseWriter, r *http.Request, store *game.Store, roomMgr
 
 	log.Printf("[%s] new connection from %s", role, r.RemoteAddr)
 
-	wsConn := handler.NewWSConn(conn, store, roomMgr, onlineMgr, broadcast, role)
+	wsConn := handler.NewWSConn(conn, store, roomMgr, onlineMgr, broadcast, role, questMgr, signMgr, talentMgr, crystalMgr, mailMgr, pveMgr, itemCatalog)
 	go wsConn.HandleLoop()
 }
 

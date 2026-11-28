@@ -163,7 +163,13 @@ func (c *WSConn) dispatchActionResult(room *game.Room, charID, tankID uint32, sl
 		c.broadcast.SendToAll(room.Members, 0, skillFrame)
 		log.Printf("[%s] player %d (tank=%d) cast skill %d (slot=%d, target=%d, ready=%d) from (%d,%d) to (%d,%d)", c.role, charID, tankID, sk.Template, slotNo, sk.TargetID, sk.Ready, sk.StartX, sk.StartY, sk.DestX, sk.DestY)
 	}
-	// Buffs before moves: client needs state changes (vanish, etc.) before position snap.
+	for _, mv := range res.Moves {
+		if mv.Speed > 0 {
+			c.roomMgr.SetMemberPos(room.ID, charID, mv.DestX, mv.DestY)
+		}
+		moveFrame := protocol.EncodeSyncSceneMove(charID, mv.DestX, mv.DestY, mv.Speed, 0, mv.MoveType)
+		c.broadcast.SendToAll(room.Members, 0, moveFrame)
+	}
 	for _, bf := range res.Buffs {
 		if bf.Remove {
 			if room.Battle != nil {
@@ -185,15 +191,6 @@ func (c *WSConn) dispatchActionResult(room *game.Room, charID, tankID uint32, sl
 			stacks = 1
 		}
 		c.broadcast.SendToAll(room.Members, 0, protocol.EncodeNotifyAddBuff(bf.TargetID, bf.TemplateID, bf.InstID, stacks, charID, dur))
-	}
-	for _, mv := range res.Moves {
-		c.roomMgr.SetMemberPos(room.ID, charID, mv.DestX, mv.DestY)
-		if mv.MoveType == 5 && mv.Speed == 0 {
-			stopFrame := protocol.EncodeNotifyStopMove(1, charID, mv.DestX, mv.DestY)
-			c.broadcast.SendToAll(room.Members, 0, stopFrame)
-		}
-		moveFrame := protocol.EncodeSyncSceneMove(charID, mv.DestX, mv.DestY, mv.Speed, 0, mv.MoveType)
-		c.broadcast.SendToAll(room.Members, 0, moveFrame)
 	}
 	nowMS := time.Now().UnixMilli()
 	if room.Battle != nil {
@@ -401,9 +398,8 @@ func (c *WSConn) startBattle(room *game.Room) {
 		battleState.NPCs = game.LoadMapNPCs(c.roomMgr.StaticDir, room.MapID)
 		battleState.Flags = game.LoadMapFlags(c.roomMgr.StaticDir, room.MapID)
 		mw := game.LoadMapWalls(c.roomMgr.StaticDir, room.MapID)
-		battleState.Walls = mw.BulletWalls     // solid only — for bullet collision
+		battleState.Walls = mw.BulletWalls       // solid only — for bullet collision
 		battleState.MoveWalls = mw.MovementWalls // solid + water — for tank movement
-		battleState.MapBounds = mw.Bounds        // playable area bounds for tank clamping
 		battleState.AirDrops = game.LoadMapAirDrops(c.roomMgr.StaticDir, room.MapID)
 	}
 
@@ -461,28 +457,11 @@ func (c *WSConn) processTick(room *game.Room) {
 		return
 	}
 
-	// Check if battle was force-ended (e.g. forfeit/surrender) — send settlement and stop
+	// Check if battle was force-ended (e.g. forfeit) — send settlement and stop
 	if bs.IsFinished() {
 		c.sendSettlement(room, bs)
 		bs.Stop()
 		return
-	}
-
-	// Check surrender vote timeout
-	nowMS := time.Now().UnixMilli()
-	if voteResult, expired := bs.CheckVoteTimeout(nowMS); expired {
-		if voteResult.Passed {
-			sponsorCamp := c.roomMgr.GetMemberCamp(room.ID, voteResult.Sponsor)
-			winner := uint8(3 - sponsorCamp)
-			bs.ForceEndSurrender(winner)
-			log.Printf("[battle] 🏳️ surrender vote passed (timeout majority)! camp%d wins", winner)
-		} else if voteResult.Failed {
-			// Send cooldown notification
-			coolSec := bs.GetVoteCooldownSeconds(nowMS)
-			coolFrame := protocol.EncodeNotifySurrenderVotationCoolTime(coolSec)
-			c.broadcast.SendToAll(voteResult.TeamIDs, 0, coolFrame)
-			log.Printf("[battle] 🗳️ surrender vote expired/failed, cooldown until %ds", coolSec)
-		}
 	}
 
 	// Gather positions
@@ -586,10 +565,6 @@ func (c *WSConn) broadcastTickResult(room *game.Room, bs *game.BattleState, memb
 			scores := bs.GetScores()
 			scoreFrame := protocol.EncodeNotifyCampKillNum(scores[1], scores[2])
 			c.broadcast.SendToAll(members, 0, scoreFrame)
-
-			// Send per-player stats (msg 1561) so G key scoreboard works
-			statFrame := c.buildSceneStat(bs, members, room)
-			c.broadcast.SendToAll(members, 0, statFrame)
 		}
 
 		// Send respawn/born notifications
@@ -749,9 +724,7 @@ func (c *WSConn) sendSettlement(room *game.Room, bs *game.BattleState) {
 	scores := bs.GetScores()
 	elapsed := int32(bs.GetElapsedMS())
 
-	winType := bs.GetWinType()
-
-	log.Printf("[battle] 🏆 game over! winner=camp%d winType=%d scores=[%d,%d] elapsed=%dms", winner, winType, scores[1], scores[2], elapsed)
+	log.Printf("[battle] 🏆 game over! winner=camp%d scores=[%d,%d] elapsed=%dms", winner, scores[1], scores[2], elapsed)
 
 	var players []protocol.SettlementPlayer
 	// Also include battle states for members who might have left
@@ -772,136 +745,25 @@ func (c *WSConn) sendSettlement(room *game.Room, bs *game.BattleState) {
 		}
 	}
 
-	// Compute honor awards (matching Python pk_rules.py settlement logic)
-	honors := computeHonors(players, winner)
-
-	// Override room type 1-9 → 2 for settlement so result_mv vinh danh plays
-	settlementRoomType := room.Type
-	if settlementRoomType >= 1 && settlementRoomType <= 9 {
-		settlementRoomType = 2
-	}
-	settlementFrame := protocol.EncodeNotifySettlement(0, room.MapID, elapsed, settlementRoomType, winner, winType, scores, players, honors)
+	settlementFrame := protocol.EncodeNotifySettlement(0, room.MapID, elapsed, room.Type, winner, 0, scores, players, protocol.HonorAwards{})
 	c.broadcast.SendToAll(members, 0, settlementFrame)
-}
 
-// buildSceneStat builds a msg 1561 frame with per-player battle stats.
-func (c *WSConn) buildSceneStat(bs *game.BattleState, members []uint32, room *game.Room) []byte {
-	entries := make([]protocol.SceneStatEntry, 0, len(members))
-	for _, mid := range members {
-		state := bs.GetMemberState(mid)
-		if state == nil {
-			continue
+	// === Post-battle quest progress update ===
+	for _, sp := range players {
+		var wins uint32
+		if sp.Camp == winner && winner != 0 {
+			wins = 1
 		}
-		entries = append(entries, protocol.SceneStatEntry{
-			AcctID:      mid,
-			Deaths:      state.Deaths,
-			Kills:       state.Kills,
-			TotalKills:  state.Kills, // same as kills for PvP (NPC kills not counted separately)
-			Assists:     state.Assists,
-			DamageOut:   state.DamageOut,
-			DamageIn:    state.DamageIn,
-			BattleLevel: 1,
-		})
-	}
-	return protocol.EncodeNotifySceneStat(entries)
-}
-
-// computeHonors calculates end-of-match honor awards from player stats.
-func computeHonors(players []protocol.SettlementPlayer, winner uint8) protocol.HonorAwards {
-	var honors protocol.HonorAwards
-	if len(players) == 0 {
-		return honors
-	}
-
-	// Best kills (tiebreak by damage, then lower ID)
-	var bestKiller uint32
-	var bestKills int32 = -1
-	var bestKillerDmg int32
-	for _, p := range players {
-		if p.Kills > bestKills || (p.Kills == bestKills && p.Damage > bestKillerDmg) {
-			bestKills = p.Kills
-			bestKillerDmg = p.Damage
-			bestKiller = p.AcctID
-		}
-	}
-	if bestKills > 0 {
-		honors.Killer = bestKiller
-	}
-
-	// Best assists (tiebreak by damage)
-	var bestAssister uint32
-	var bestAssists int32 = -1
-	var bestAssisterDmg int32
-	for _, p := range players {
-		if p.Assists > bestAssists || (p.Assists == bestAssists && p.Damage > bestAssisterDmg) {
-			bestAssists = p.Assists
-			bestAssisterDmg = p.Damage
-			bestAssister = p.AcctID
-		}
-	}
-	if bestAssists > 0 {
-		honors.Assister = bestAssister
-	}
-
-	// MVP: best (kills+assists)/max(1,deaths) ratio per team, tiebreak by damage
-	bestByTeam := func(camp uint8) uint32 {
-		var bestID uint32
-		var bestRatio float64 = -1
-		var bestDmg int32
-		for _, p := range players {
-			if p.Camp != camp {
-				continue
-			}
-			deaths := p.Deaths
-			if deaths < 1 {
-				deaths = 1
-			}
-			ratio := float64(p.Kills+p.Assists) / float64(deaths)
-			if ratio > bestRatio || (ratio == bestRatio && p.Damage > bestDmg) {
-				bestRatio = ratio
-				bestDmg = p.Damage
-				bestID = p.AcctID
+		updated := c.questMgr.UpdateBattleProgress(sp.AcctID,
+			uint32(sp.Kills), uint32(sp.Damage), 1, wins)
+		if len(updated) > 0 {
+			for _, q := range updated {
+				frame := protocol.EncodeNotifyQuestUpdate(protocol.QuestData{
+					QuestID: q.QuestID, State: q.State, Count: q.Count,
+					Field3: q.Field3, Field4: q.Field4, Field5: q.Field5, Field6: q.Field6,
+				})
+				c.broadcast.SendTo(sp.AcctID, frame)
 			}
 		}
-		return bestID
 	}
-
-	if winner > 0 && winner <= 2 {
-		honors.VictoryMvp = bestByTeam(winner)
-		honors.KDA = honors.VictoryMvp
-		loser := uint8(3 - winner)
-		honors.DefeatMvp = bestByTeam(loser)
-	} else {
-		// Draw — pick best from each team; client's mvp() needs both set
-		camp1Mvp := bestByTeam(1)
-		camp2Mvp := bestByTeam(2)
-		honors.VictoryMvp = camp1Mvp
-		honors.DefeatMvp = camp2Mvp
-		if camp1Mvp != 0 {
-			honors.KDA = camp1Mvp
-		} else {
-			honors.KDA = camp2Mvp
-		}
-	}
-
-	// Fill any zero honor IDs with KDA (MVP) fallback.
-	// Client order() treats 0 as a valid player ID, causing _brief(0) to
-	// return empty → variant cycles every frame → red/green flicker.
-	fallback := honors.KDA
-	if fallback == 0 {
-		fallback = honors.Killer
-	}
-	if fallback != 0 {
-		if honors.Killer == 0 {
-			honors.Killer = fallback
-		}
-		if honors.Assister == 0 {
-			honors.Assister = fallback
-		}
-		if honors.KDA == 0 {
-			honors.KDA = fallback
-		}
-	}
-
-	return honors
 }

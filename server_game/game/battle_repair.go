@@ -19,7 +19,14 @@ func (bs *BattleState) tickRepairBoxes(positions map[uint32]*MemberPos, now int6
 				continue
 			}
 			if now >= npc.RepairNextAt {
-				heal := int32(math.Round(float64(target.MaxHP) * 0.04))
+				rawHeal := float64(target.MaxHP) * 0.04
+				wounds := WoundReductionsLocked(target, now)
+				incomingBonus := AttrBonusLocked(target, now, AttrHealMod)
+				heal := int32(CalculateHeal(HealParams{
+					Raw:             rawHeal,
+					IncomingBonus:   incomingBonus,
+					WoundReductions: wounds,
+				}))
 				if heal < 1 {
 					heal = 1
 				}

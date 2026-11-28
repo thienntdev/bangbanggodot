@@ -40,6 +40,7 @@ type Character struct {
 	Silver         int32 // bạc
 	Thew           int32 // thể lực
 	AvatarID       uint32
+	DecorateID     uint32 // background template ID
 	VipLevel       uint8
 	Elo            int32
 	CharOption     string // JSON key binding / smartcast settings (persisted in DB `data` JSONB)
@@ -1007,12 +1008,6 @@ func (s *Store) UseItem(charID uint32, contType uint8, slotNo int16, count int32
 		count = it.Count
 	}
 	it.Count -= count
-
-	if it.TemplateID == 2004393 { // 10 xu khóa
-		c.Golden += count * 10
-	} else if it.TemplateID == 8000005 { // Vàng xu
-		c.Silver += count * 50
-	}
 
 	if s.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
