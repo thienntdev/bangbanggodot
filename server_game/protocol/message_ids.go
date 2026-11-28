@@ -37,6 +37,11 @@ const (
 	MsgNotifyFirstCharge    int16 = 1031  // S→C: first charge info
 	MsgNotifySettingFlag    int16 = 1036  // S→C: setting flags
 	MsgNotifyCharCurrency   int16 = 1039  // S→C: currency update
+	MsgNotifyCharOption     int16 = 1047  // S→C: key binding / smartcast options (JSON utf8)
+
+	// === Settings (C→S) ===
+	MsgRequestChangeSetting  int16 = 79  // C→S: change setting flags (u32)
+	MsgRequestSetCharOption  int16 = 88  // C→S: set key binding / smartcast options (utf8 JSON)
 
 	// === Items & Bags ===
 	MsgRequestSellItem      int16 = 151  // C→S: sell item
@@ -78,9 +83,15 @@ const (
 	MsgNotifyBossState    int16 = 1951 // S→C: boss activity state
 	MsgNotifyBossSnapshot int16 = 1952 // S→C: boss snapshot (HP, rank)
 
+	// === Surrender / Vote ===
+	MsgRequestSurrenderVotation  int16 = 512  // C→S: request surrender vote (body: sceneId u32)
+	MsgVoteSurrender             int16 = 513  // C→S: cast vote (body: agree u8 + sceneId u32)
+
 	// === Rooms & Hall ===
 	MsgRequestMoveForward    int16 = 501  // C→S: move forward
 	MsgRequestUseSkill       int16 = 503  // C→S: use skill / shoot
+	MsgRequestOpSpray        int16 = 507  // C→S: use spray paint
+	MsgRequestSignalInfo     int16 = 511  // C→S: minimap signal (attack/retreat/rally)
 	MsgRequestCreateRoom     int16 = 600  // C→S: create room
 	MsgRequestJoinRoom       int16 = 601  // C→S: join room
 	MsgRequestRoomOp         int16 = 602  // C→S: room operation (ready, camp, leave, kick, etc.)
@@ -97,12 +108,14 @@ const (
 	MsgNotifyAddBuff         int16 = 1558 // S→C: add buff to actor
 	MsgNotifyRemoveBuff      int16 = 1559 // S→C: remove buff from actor
 	MsgNotifyAttrChange      int16 = 1560 // S→C: sync actor attribute (1=speed, 4=fireInterval)
+	MsgNotifySceneStat       int16 = 1561 // S→C: per-player battle stats (kills, deaths, assists, damage)
 	MsgNotifyAddObject       int16 = 1556 // S→C: add scene object (Wukong space visuals, etc.)
 	MsgSyncSceneData         int16 = 1564 // S→C: battle sync scene data (movement, fire, hp)
 	MsgNotifySkillCoolTime   int16 = 1572 // S→C: skill/props cooldown update
 	MsgNotifySwapSkill       int16 = 1579 // S→C: replace skill slot (e.g. Wukong empowered slot 0)
 	MsgNotifyBuffUpdate      int16 = 1581 // S→C: update buff timer and stacks
 	MsgNotifyBattleEnter     int16 = 1586 // S→C: notify enter battle (battle starts)
+	MsgNotifyStopMove        int16 = 1554 // S→C: stop/snap move (instant halt/teleport)
 	MsgEnterRoomOk           int16 = 1700 // S→C: enter room ok
 	MsgNotifyRoomOp          int16 = 1701 // S→C: notify room operation
 	MsgNotifyRoomAdd         int16 = 1702 // S→C: notify new player joined room
@@ -131,10 +144,17 @@ const (
 	// === Battle helper ===
 	MsgNotifyBattleBooster int16 = 1056  // S→C: battle booster
 
+	// === Surrender notifications ===
+	MsgNotifyShowSurrenderVotation    int16 = 1597 // S→C: show vote panel (validCount u8, showEndTime u32, nextTime u32, sponsor u32)
+	MsgUpdateVotationInfo             int16 = 1598 // S→C: update vote results (validCount u8, vecVoteInfo array[u16] of u8)
+	MsgNotifySurrenderVotationCoolTime int16 = 1599 // S→C: cooldown time (nTime u32)
+
 	// === Battle events ===
 	MsgNotifyBorn          int16 = 1552  // S→C: respawn/born
 	MsgNotifyRespawnTimer  int16 = 1553  // S→C: respawn countdown
 	MsgNotifyKillInfo      int16 = 1566  // S→C: kill notification
+	MsgNotifySpray         int16 = 1569  // S→C: spray paint display
+	MsgNotifySignalInfo    int16 = 1594  // S→C: minimap signal notification
 	MsgSyncHpChange        int16 = 1605  // S→C: damage/heal numbers (deltas for fly text)
 	MsgNotifySettlement    int16 = 1708  // S→C: battle end settlement
 	MsgNotifyCampKillNum   int16 = 1710  // S→C: camp kill count update

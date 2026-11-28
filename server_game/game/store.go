@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -41,6 +42,8 @@ type Character struct {
 	AvatarID       uint32
 	VipLevel       uint8
 	Elo            int32
+	CharOption     string // JSON key binding / smartcast settings (persisted in DB `data` JSONB)
+	SettingFlag    uint32 // client setting flags (persisted in DB `data` JSONB)
 	Tanks          []PlayerTank
 	Items          []PlayerItem
 	Created        time.Time
@@ -437,7 +440,10 @@ func (s *Store) loadAllDataFromDB() error {
 
 	// 2. Load characters
 	charRows, err := s.db.QueryContext(ctx, `
-		SELECT char_id, user_id, char_uuid, name, level, exp, cash, golden, silver, thew, avatar_id, vip_level, elo, created_at
+		SELECT char_id, user_id, char_uuid, name, level, exp, cash, golden, silver, thew, avatar_id, vip_level, elo,
+		       COALESCE(data->>'char_option', '') AS char_option,
+		       COALESCE((data->>'setting_flag')::INT, 0) AS setting_flag,
+		       created_at
 		FROM characters
 	`)
 	if err != nil {
@@ -449,10 +455,11 @@ func (s *Store) loadAllDataFromDB() error {
 	for charRows.Next() {
 		var cid, uid, avatar int64
 		var lvl, vip int16
+		var settingFlag int64
 		c := &Character{}
 		if err := charRows.Scan(
 			&cid, &uid, &c.CharUuid, &c.Name, &lvl, &c.Exp, &c.Cash, &c.Golden, &c.Silver,
-			&c.Thew, &avatar, &vip, &c.Elo, &c.Created,
+			&c.Thew, &avatar, &vip, &c.Elo, &c.CharOption, &settingFlag, &c.Created,
 		); err != nil {
 			return fmt.Errorf("scan character: %w", err)
 		}
@@ -461,6 +468,7 @@ func (s *Store) loadAllDataFromDB() error {
 		c.Level = uint8(lvl)
 		c.AvatarID = uint32(avatar)
 		c.VipLevel = uint8(vip)
+		c.SettingFlag = uint32(settingFlag)
 		if c.CharID > maxCharID {
 			maxCharID = c.CharID
 		}
@@ -1299,6 +1307,76 @@ func (s *Store) BuyGoods(charID uint32, goodsID uint32, coinType uint32, price i
 	}
 
 	return c, addedTank, addedItem, nil
+}
+
+// DefaultCharOption is the default key binding JSON sent on first login.
+const DefaultCharOption = `{"skillSlot":[10,1,2,4],"keyBoardSet":[]}`
+
+// GetCharOption returns the char option JSON (key bindings), falling back to default.
+func (s *Store) GetCharOption(charID uint32) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c := s.characters[charID]
+	if c == nil || c.CharOption == "" {
+		return DefaultCharOption
+	}
+	return c.CharOption
+}
+
+// SetCharOption saves key binding / smartcast options for a character.
+func (s *Store) SetCharOption(charID uint32, optionJSON string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.characters[charID]
+	if c == nil {
+		return
+	}
+	c.CharOption = optionJSON
+	if s.db != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			s.db.ExecContext(ctx, `
+				UPDATE characters 
+				SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{char_option}', to_jsonb($1::text)), updated_at = NOW()
+				WHERE char_id = $2
+			`, optionJSON, charID)
+		}()
+	}
+}
+
+// GetSettingFlag returns the setting flags for a character.
+func (s *Store) GetSettingFlag(charID uint32) uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c := s.characters[charID]
+	if c == nil {
+		return 0
+	}
+	return c.SettingFlag
+}
+
+// SetSettingFlag saves setting flags for a character.
+func (s *Store) SetSettingFlag(charID uint32, flags uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.characters[charID]
+	if c == nil {
+		return
+	}
+	c.SettingFlag = flags
+	if s.db != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			flagStr, _ := json.Marshal(flags)
+			s.db.ExecContext(ctx, `
+				UPDATE characters 
+				SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{setting_flag}', $1::jsonb), updated_at = NOW()
+				WHERE char_id = $2
+			`, string(flagStr), charID)
+		}()
+	}
 }
 
 func generateUUID() string {

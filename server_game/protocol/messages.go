@@ -852,6 +852,17 @@ func EncodeNotifyBattleEnter(startTime uint32, overTime uint8) []byte {
 	return BuildFrame(MsgNotifyBattleEnter, 0, w.Bytes())
 }
 
+// EncodeNotifyStopMove builds message 1554 (SceneMessage.NotifyStopMove).
+// Halts actor motion immediately and snaps position (used for blinks / instant displacement).
+func EncodeNotifyStopMove(sceneID, objID uint32, x, y int16) []byte {
+	w := NewWriter()
+	w.PutU32(sceneID)
+	w.PutU32(objID)
+	w.PutI16(x)
+	w.PutI16(y)
+	return BuildFrame(MsgNotifyStopMove, 0, w.Bytes())
+}
+
 // EncodeSyncSceneMove builds message 1564 (SceneMessage.SyncSceneData) with a single MoveInfo.
 func EncodeSyncSceneMove(objID uint32, x, y, speed int16, direction, moveType uint8) []byte {
 	w := NewWriter()
@@ -1285,14 +1296,14 @@ func EncodeSyncSceneCombatEx(
 //   m_svrExpRate(f32), m_tokengoldRate(f32), m_bpvpActOpen(u8), m_nItemDropRate(u32),
 //   m_nKiller(u32), m_nAssister(u32), m_nKDA(u32), m_nDestroyer(u32),
 //   m_nVictoryMvp(u32), m_nDefeatMvp(u32), m_sceneUuid(utf8)
-func EncodeNotifySettlement(sceneID, mapID uint32, elapsedMS int32, roomType, winner uint8, scores [3]int32, players []SettlementPlayer) []byte {
+func EncodeNotifySettlement(sceneID, mapID uint32, elapsedMS int32, roomType, winner, winType uint8, scores [3]int32, players []SettlementPlayer, honors HonorAwards) []byte {
 	w := NewWriter()
 	w.PutU32(sceneID)                 // m_nSceneId
 	w.PutU32(mapID)                   // m_nMapId
 	w.PutU32(uint32(elapsedMS / 1000)) // m_battleTime (seconds)
 	w.PutU8(roomType)                 // m_roomType
 	w.PutU8(winner)                   // m_winCamp (0=draw, 1=camp1, 2=camp2)
-	w.PutU8(1)                        // m_winType (1=normal, 3=surrender, 4=draw)
+	w.PutU8(winType)                  // m_winType (1=normal, 3=surrender, 4=draw)
 	w.PutI16(int16(scores[1]))        // m_rebLifeCount (red kills)
 	w.PutI16(int16(scores[2]))        // m_buleLifeCount (blue kills)
 
@@ -1311,12 +1322,12 @@ func EncodeNotifySettlement(sceneID, mapID uint32, elapsedMS int32, roomType, wi
 
 	w.PutU8(0)  // m_bpvpActOpen
 	w.PutU32(0) // m_nItemDropRate
-	w.PutU32(0) // m_nKiller
-	w.PutU32(0) // m_nAssister
-	w.PutU32(0) // m_nKDA
-	w.PutU32(0) // m_nDestroyer
-	w.PutU32(0) // m_nVictoryMvp
-	w.PutU32(0) // m_nDefeatMvp
+	w.PutU32(honors.Killer)     // m_nKiller
+	w.PutU32(honors.Assister)   // m_nAssister
+	w.PutU32(honors.KDA)        // m_nKDA (MVP)
+	w.PutU32(honors.Destroyer)  // m_nDestroyer
+	w.PutU32(honors.VictoryMvp) // m_nVictoryMvp
+	w.PutU32(honors.DefeatMvp)  // m_nDefeatMvp
 
 	// m_sceneUuid (utf8 = u16 length + bytes)
 	w.PutU16(0) // empty string
@@ -1377,6 +1388,16 @@ func putTankSettleInfo(w *Writer, p *SettlementPlayer, winner uint8) {
 	w.PutU8(0) // m_iDeadEval
 	w.PutU8(0) // m_iTimeEval
 	w.PutU8(0) // m_iBoosterEval
+}
+
+// HonorAwards holds end-of-match honor player IDs (account IDs).
+type HonorAwards struct {
+	Killer     uint32 // best kills
+	Assister   uint32 // best assists
+	KDA        uint32 // best (kills+assists)/deaths ratio (MVP)
+	Destroyer  uint32 // most structure damage
+	VictoryMvp uint32 // winning team MVP
+	DefeatMvp  uint32 // losing team MVP
 }
 
 // SettlementPlayer holds per-player end-of-match stats.
@@ -1442,4 +1463,105 @@ func EncodeNotifyOccupyScore(index, camp, gain int32) []byte {
 	w.PutI32(camp)
 	w.PutI32(gain)
 	return BuildFrame(MsgNotifyOccupyScore, 0, w.Bytes())
+}
+
+// EncodeNotifyShowSurrenderVotation builds message 1597 (show vote panel to team).
+// Schema: m_validCount(u8), m_nShowEndTime(u32), m_nNextTime(u32), m_nSponsor(u32)
+func EncodeNotifyShowSurrenderVotation(validCount uint8, showEndTime, nextTime, sponsor uint32) []byte {
+	w := NewWriter()
+	w.PutU8(validCount)      // number of eligible voters
+	w.PutU32(showEndTime)    // server time when vote popup ends (seconds since battle start)
+	w.PutU32(nextTime)       // earliest next vote allowed (seconds since battle start)
+	w.PutU32(sponsor)        // charID who initiated the vote
+	return BuildFrame(MsgNotifyShowSurrenderVotation, 0, w.Bytes())
+}
+
+// EncodeUpdateVotationInfo builds message 1598 (update vote results).
+// Schema: m_validCount(u8), m_vecVoteInfo(array[u16] of u8)
+// Each vote value: 0=not voted, 1=deny, 2=agree, 3=invalid/absent
+func EncodeUpdateVotationInfo(validCount uint8, votes []uint8) []byte {
+	w := NewWriter()
+	w.PutU8(validCount) // number of eligible voters
+	w.PutU16(uint16(len(votes)))
+	for _, v := range votes {
+		w.PutU8(v)
+	}
+	return BuildFrame(MsgUpdateVotationInfo, 0, w.Bytes())
+}
+
+// EncodeNotifySurrenderVotationCoolTime builds message 1599 (vote cooldown).
+// Schema: m_nTime(u32)
+func EncodeNotifySurrenderVotationCoolTime(coolTime uint32) []byte {
+	w := NewWriter()
+	w.PutU32(coolTime) // seconds since battle start when cooldown ends
+	return BuildFrame(MsgNotifySurrenderVotationCoolTime, 0, w.Bytes())
+}
+
+
+// EncodeNotifyCharOption builds message 1047 (NotifyCharOption).
+// Schema: m_strOption(utf8) — JSON string with key bindings and smartcast config.
+func EncodeNotifyCharOption(jsonPayload string) []byte {
+	w := NewWriter()
+	w.PutUTF8(jsonPayload)
+	return BuildFrame(MsgNotifyCharOption, 0, w.Bytes())
+}
+
+
+// EncodeNotifySpray builds message 1569 (TankMessage.NotifySpray).
+// Schema: m_sprayId(u32), m_x(i16), m_y(i16)
+func EncodeNotifySpray(sprayID uint32, x, y int16) []byte {
+	w := NewWriter()
+	w.PutU32(sprayID)
+	w.PutI16(x)
+	w.PutI16(y)
+	return BuildFrame(MsgNotifySpray, 0, w.Bytes())
+}
+
+// EncodeNotifySignalInfo builds message 1594 (TankMessage.NotifySignalInfo).
+// Schema: m_objectId(u32), m_iDestX(i16), m_iDestY(i16), m_iSignalType(u8)
+func EncodeNotifySignalInfo(objectID uint32, destX, destY int16, signalType uint8) []byte {
+	w := NewWriter()
+	w.PutU32(objectID)
+	w.PutI16(destX)
+	w.PutI16(destY)
+	w.PutU8(signalType)
+	return BuildFrame(MsgNotifySignalInfo, 0, w.Bytes())
+}
+
+// SceneStatEntry holds per-player battle stats for msg 1561.
+type SceneStatEntry struct {
+	AcctID      uint32
+	Deaths      int32
+	Kills       int32
+	TotalKills  int32 // includes NPC kills
+	Assists     int32
+	DamageOut   int32
+	DamageIn    int32
+	BattleLevel uint8
+}
+
+// EncodeNotifySceneStat builds message 1561 (SceneMessage.NotifySceneStat).
+// Schema: m_statVec(array[u16] of TankStatInfo)
+// TankStatInfo: m_acctOid(u32), m_iStatData(array[u16] of i32), m_battlelevel(u8)
+// Python sends 21 i32s per player: [deaths, kills, totalKills, assists, 0, 0, dmgOut, 0, 0, 0, 0, 0, 0, dmgIn, ...]
+func EncodeNotifySceneStat(entries []SceneStatEntry) []byte {
+	w := NewWriter()
+	w.PutU16(uint16(len(entries)))
+	for _, e := range entries {
+		w.PutU32(e.AcctID)
+		// m_iStatData: 21 i32s matching Python pk_rules.py layout
+		w.PutU16(21)
+		stats := [21]int32{}
+		stats[0] = e.Deaths
+		stats[1] = e.Kills
+		stats[2] = e.TotalKills
+		stats[3] = e.Assists
+		stats[6] = e.DamageOut
+		stats[13] = e.DamageIn
+		for _, v := range stats {
+			w.PutI32(v)
+		}
+		w.PutU8(e.BattleLevel)
+	}
+	return BuildFrame(MsgNotifySceneStat, 0, w.Bytes())
 }

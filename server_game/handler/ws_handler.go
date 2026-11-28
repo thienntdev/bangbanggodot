@@ -335,6 +335,31 @@ func (c *WSConn) handleFrame(frame []byte) error {
 		curFrame := protocol.EncodeNotifyCharCurrency(&cur)
 		return c.SendMulti(bagFrame, curFrame)
 
+	case protocol.MsgRequestChangeSetting: // 79 — setting flags
+		if len(body) >= 4 {
+			r := protocol.NewReader(body)
+			flags, _ := r.GetU32()
+			log.Printf("[%s] setting flags = %d", c.role, flags)
+			if c.session != nil {
+				c.store.SetSettingFlag(c.session.CharID, flags)
+			}
+			return c.Send(protocol.EncodeNotifySettingFlag(flags))
+		}
+		return nil
+
+	case protocol.MsgRequestSetCharOption: // 88 — key binding / smartcast
+		if len(body) >= 2 {
+			r := protocol.NewReader(body)
+			jsonStr, _ := r.GetUTF8()
+			log.Printf("[%s] char option: %s", c.role, jsonStr)
+			if c.session != nil {
+				c.store.SetCharOption(c.session.CharID, jsonStr)
+			}
+			// Echo back as 1047 to confirm
+			return c.Send(protocol.EncodeNotifyCharOption(jsonStr))
+		}
+		return nil
+
 	case protocol.MsgSystemHeartBeat:
 		return c.Send(protocol.EncodeHeartBeat())
 
@@ -473,7 +498,7 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			mapID = game.RandomMapID()
 			log.Printf("[%s] random map for new room: mapID=%d", c.role, mapID)
 		}
-		// Create room in room manager
+		// Create room in room manager (keep original room type as-is)
 		room := c.roomMgr.CreateRoom(req.Name, req.BType, uint32(req.BMode), mapID, req.Password, p.CharID, creatorBrief)
 		c.roomID = room.ID
 		frame := protocol.EncodeEnterRoomOk(room.ID, p.CharID, req.Name, req.BType, uint32(req.BMode), mapID, req.Password, creatorBrief)
@@ -595,7 +620,12 @@ func (c *WSConn) handleFrame(frame []byte) error {
 				room.State = 1 // in-battle
 				c.roomMgr.ResetLoaded(room.ID)
 				briefs := c.roomMgr.GetMemberBriefs(room.ID)
-				startFrame := protocol.EncodeNotifyStartGame(room.ID, room.MapID, room.Type, briefs, 0)
+				// Override room type 1-9 → 2 for battle start so result_mv vinh danh plays
+			startRoomType := room.Type
+			if startRoomType >= 1 && startRoomType <= 9 {
+				startRoomType = 2
+			}
+			startFrame := protocol.EncodeNotifyStartGame(room.ID, room.MapID, startRoomType, briefs, 0)
 				c.broadcast.SendToAll(room.Members, 0, startFrame)
 			}
 			return nil
@@ -728,8 +758,10 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			}
 			beh := c.roomMgr.GetMemberBehavior(room.ID, charID, tankID)
 			var walls []game.WallRect
+			var bounds game.ArenaBounds
 			if room.Battle != nil {
-				walls = room.Battle.Walls
+				walls = room.Battle.MoveWalls
+				bounds = room.Battle.MapBounds
 			}
 			ctx := &game.ActorContext{
 				RoomID:  room.ID,
@@ -740,6 +772,7 @@ func (c *WSConn) handleFrame(frame []byte) error {
 				PosY:    startY,
 				Config:  cfg,
 				Walls:   walls,
+				Bounds:  bounds,
 			}
 			if room.Battle != nil {
 				room.Battle.BehaviorMu.Lock()
@@ -758,6 +791,185 @@ func (c *WSConn) handleFrame(frame []byte) error {
 			}
 			c.dispatchActionResult(room, charID, tankID, req.SlotNo, res)
 		}
+		return nil
+
+	case protocol.MsgRequestSurrenderVotation:
+		// C→S: request to start a surrender vote. Body: u32 sceneId.
+		charID := uint32(0)
+		if c.session != nil && c.session.Character != nil {
+			charID = c.session.Character.CharID
+		}
+		if charID == 0 {
+			return nil
+		}
+		room := c.roomMgr.GetRoom(c.roomID)
+		if room == nil {
+			room = c.roomMgr.FindRoomByMember(charID)
+		}
+		if room == nil || room.Battle == nil || room.Battle.IsFinished() {
+			return nil
+		}
+		bs := room.Battle
+		sponsorCamp := c.roomMgr.GetMemberCamp(room.ID, charID)
+		if sponsorCamp == 0 {
+			return nil
+		}
+
+		// Collect team members (same camp as sponsor)
+		allMembers := c.roomMgr.GetMembers(room.ID)
+		var teamIDs []uint32
+		for _, mid := range allMembers {
+			mc := c.roomMgr.GetMemberCamp(room.ID, mid)
+			if mc == sponsorCamp {
+				teamIDs = append(teamIDs, mid)
+			}
+		}
+		if len(teamIDs) < 1 {
+			return nil
+		}
+
+		nowMS := time.Now().UnixMilli()
+		result := bs.StartSurrenderVote(charID, teamIDs, nowMS)
+
+		if result.OnCooldown || result.AlreadyActive {
+			return nil
+		}
+		if !result.Started {
+			return nil
+		}
+
+		// Send 1597 to team members
+		showEnd := bs.GetBattleSeconds(bs.VoteEndAt)
+		nextTime := bs.GetBattleSeconds(nowMS + game.VoteCooldownMS) // next allowed vote time
+		frame := protocol.EncodeNotifyShowSurrenderVotation(result.ValidCount, showEnd, nextTime, charID)
+		c.broadcast.SendToAll(teamIDs, 0, frame)
+
+		// If only 1 player on team, auto-pass
+		if len(teamIDs) == 1 {
+			winner := uint8(3 - sponsorCamp)
+			bs.ForceEndSurrender(winner)
+			log.Printf("[battle] 🏳️ solo surrender by %d, camp%d wins", charID, winner)
+		}
+
+		log.Printf("[battle] 🗳️ surrender vote started by %d (camp%d), %d voters", charID, sponsorCamp, len(teamIDs))
+		return nil
+
+	case protocol.MsgVoteSurrender:
+		// C→S: cast a surrender vote. Body: u8 vote + u32 sceneId.
+		if len(body) < 5 {
+			return nil
+		}
+		voteValue := body[0] // 2=agree, 1=deny
+		agree := voteValue == 2
+
+		charID := uint32(0)
+		if c.session != nil && c.session.Character != nil {
+			charID = c.session.Character.CharID
+		}
+		if charID == 0 {
+			return nil
+		}
+		room := c.roomMgr.GetRoom(c.roomID)
+		if room == nil {
+			room = c.roomMgr.FindRoomByMember(charID)
+		}
+		if room == nil || room.Battle == nil || room.Battle.IsFinished() {
+			return nil
+		}
+		bs := room.Battle
+		nowMS := time.Now().UnixMilli()
+		result := bs.CastSurrenderVote(charID, agree, nowMS)
+
+		if result.ValidCount == 0 {
+			return nil
+		}
+
+		// Broadcast 1598 update to team
+		updateFrame := protocol.EncodeUpdateVotationInfo(result.ValidCount, result.VoteSlice)
+		c.broadcast.SendToAll(result.TeamIDs, 0, updateFrame)
+
+		if result.Passed {
+			// Surrender passed — opposing camp wins
+			sponsorCamp := c.roomMgr.GetMemberCamp(room.ID, result.Sponsor)
+			winner := uint8(3 - sponsorCamp)
+			bs.ForceEndSurrender(winner)
+			log.Printf("[battle] 🏳️ surrender vote passed! camp%d surrenders, camp%d wins", sponsorCamp, winner)
+		} else if result.Failed {
+			// Vote failed — send cooldown to team
+			coolSec := bs.GetVoteCooldownSeconds(nowMS)
+			coolFrame := protocol.EncodeNotifySurrenderVotationCoolTime(coolSec)
+			c.broadcast.SendToAll(result.TeamIDs, 0, coolFrame)
+			log.Printf("[battle] 🗳️ surrender vote failed, cooldown until %ds", coolSec)
+		}
+		return nil
+
+	case protocol.MsgRequestOpSpray: // 507 — spray paint
+		if len(body) < 8 {
+			return nil
+		}
+		r := protocol.NewReader(body)
+		_, _ = r.GetU32() // sceneId
+		x, _ := r.GetI16()
+		y, _ := r.GetI16()
+		charID := uint32(0)
+		if c.session != nil && c.session.Character != nil {
+			charID = c.session.Character.CharID
+		}
+		if charID == 0 {
+			return nil
+		}
+		room := c.roomMgr.GetRoom(c.roomID)
+		if room == nil {
+			room = c.roomMgr.FindRoomByMember(charID)
+		}
+		if room == nil {
+			return nil
+		}
+		// Use the player's equipped spray ID (from CharBasic.SprayID)
+		sprayID := uint32(0)
+		if c.session.Character.AvatarID > 0 {
+			// Default spray 1 for now — TODO: store equipped spray per character
+			sprayID = 1
+		}
+		sprayFrame := protocol.EncodeNotifySpray(sprayID, x, y)
+		c.broadcast.SendToAll(room.Members, 0, sprayFrame)
+		log.Printf("[%s] spray from %d at (%d,%d) sprayID=%d", c.role, charID, x, y, sprayID)
+		return nil
+
+	case protocol.MsgRequestSignalInfo: // 511 — minimap signal (attack/retreat/rally)
+		if len(body) < 9 {
+			return nil
+		}
+		r := protocol.NewReader(body)
+		_, _ = r.GetU32() // sceneId
+		destX, _ := r.GetI16()
+		destY, _ := r.GetI16()
+		sigType, _ := r.GetU8()
+		charID := uint32(0)
+		if c.session != nil && c.session.Character != nil {
+			charID = c.session.Character.CharID
+		}
+		if charID == 0 {
+			return nil
+		}
+		room := c.roomMgr.GetRoom(c.roomID)
+		if room == nil {
+			room = c.roomMgr.FindRoomByMember(charID)
+		}
+		if room == nil {
+			return nil
+		}
+		// Broadcast signal to same-camp team members
+		camp := c.roomMgr.GetMemberCamp(room.ID, charID)
+		var teamIDs []uint32
+		for _, mid := range room.Members {
+			if c.roomMgr.GetMemberCamp(room.ID, mid) == camp {
+				teamIDs = append(teamIDs, mid)
+			}
+		}
+		sigFrame := protocol.EncodeNotifySignalInfo(charID, destX, destY, sigType)
+		c.broadcast.SendToAll(teamIDs, 0, sigFrame)
+		log.Printf("[%s] signal type=%d from %d at (%d,%d) to %d teammates", c.role, sigType, charID, destX, destY, len(teamIDs))
 		return nil
 
 	case protocol.MsgRequestExitBattleEnd:
@@ -1091,7 +1303,10 @@ func (c *WSConn) handleServerLogin(body []byte) error {
 	bag7 := c.encodeItemList(7, 1)
 
 	currencyUpdate := protocol.EncodeNotifyCharCurrency(&currency)
-	settingFlag := protocol.EncodeNotifySettingFlag(0)
+	settingFlag := protocol.EncodeNotifySettingFlag(c.store.GetSettingFlag(p.CharID))
+
+	// Key binding / smartcast options (load saved data or default)
+	charOption := protocol.EncodeNotifyCharOption(c.store.GetCharOption(p.CharID))
 
 	// Register player as online and kick old session if already connected
 	oldConn := c.broadcast.Register(p.CharID, c)
@@ -1125,6 +1340,7 @@ func (c *WSConn) handleServerLogin(body []byte) error {
 		bag7,           // 1100 (Decor)
 		currencyUpdate, // 1039
 		settingFlag,    // 1036
+		charOption,     // 1047
 	)
 }
 

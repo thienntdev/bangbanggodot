@@ -11,27 +11,28 @@ import (
 
 // MemberState tracks a member's battle HP and status.
 type MemberState struct {
-	HP            int32
-	MaxHP         int32
-	MP            int32
-	MaxMP         int32
-	MPRecover     int32 // passive MP gained per MPRecInterv
-	MPRecInterv   int32 // passive MP regen interval in ms (default 1000)
-	NextMPRegenAt int64 // unix ms for next passive MP regen
-	Shield        int32 // current shield HP (absorbs damage before HP)
-	Alive      bool
-	Camp       uint8
-	RespawnAt  int64 // unix ms, 0 = not respawning
-	Kills      int32
-	Deaths     int32
-	Assists    int32
-	DamageOut  int32 // total damage dealt
-	TankID     uint32
-	SpawnX     int16
-	SpawnY     int16
-	SpawnIndex    int             // player index for spawn point selection
-	RepairReadyAt     int64           // unix ms cooldown before next HP box heal (15s)
-	Cooldowns         map[uint8]int64 // slotNo -> unix ms when slot is ready again
+	HP                int32
+	MaxHP             int32
+	MP                int32
+	MaxMP             int32
+	MPRecover         int32 // passive MP gained per MPRecInterv
+	MPRecInterv       int32 // passive MP regen interval in ms (default 1000)
+	NextMPRegenAt     int64 // unix ms for next passive MP regen
+	Shield            int32 // current shield HP (absorbs damage before HP)
+	Alive             bool
+	Camp              uint8
+	RespawnAt         int64 // unix ms, 0 = not respawning
+	Kills             int32
+	Deaths            int32
+	Assists           int32
+	DamageOut         int32 // total damage dealt
+	DamageIn          int32 // total damage received
+	TankID            uint32
+	SpawnX            int16
+	SpawnY            int16
+	SpawnIndex        int                   // player index for spawn point selection
+	RepairReadyAt     int64                 // unix ms cooldown before next HP box heal (15s)
+	Cooldowns         map[uint8]int64       // slotNo -> unix ms when slot is ready again
 	DamageImmuneUntil int64                 // unix ms until damage immunity expires
 	DamageReduceUntil int64                 // unix ms until damage reduction expires
 	DamageReducePct   float64               // e.g. 0.50
@@ -185,11 +186,21 @@ type BattleState struct {
 	Flags        []*MapFlag         // capture points for occupy maps (ModeType == 2)
 	Walls        []WallRect         // solid wall blocks — bullets collide with these
 	MoveWalls    []WallRect         // solid + water walls — tanks cannot move through these
+	MapBounds    ArenaBounds        // playable area bounds for tank clamping
 	AirDrops     []AirDropPoint     // air-drop spawn positions (chunk tag 5)
 	AirDropDueAt int64              // unix ms for next periodic air drop
 	Drops        map[uint32]*MapDrop
 	NextDropID   uint32
 	NextBulletID uint32
+
+	// Surrender vote state
+	VoteActive     bool              // true when a vote is in progress
+	VoteSponsor    uint32            // charID who started the vote
+	VoteEndAt      int64             // unix ms when vote popup expires
+	VoteResults    map[uint32]uint8  // charID → 0=not voted, 1=deny, 2=agree
+	VoteTeamIDs    []uint32          // eligible voters (same camp as sponsor)
+	VoteCooldownAt int64             // unix ms, earliest next vote
+	WinType        uint8             // 1=normal (default), 3=surrender, 4=draw
 
 	stopCh chan struct{}
 }
@@ -431,6 +442,201 @@ func (bs *BattleState) ForceEnd(winner uint8) {
 	bs.Winner = winner
 }
 
+// ForceEndSurrender forces the battle to end by surrender (winType=3).
+func (bs *BattleState) ForceEndSurrender(winner uint8) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if bs.Finished {
+		return
+	}
+	bs.Finished = true
+	bs.Winner = winner
+	bs.WinType = 3
+}
+
+// GetWinType returns the win type (1=normal, 3=surrender, 4=draw). Default is 1.
+func (bs *BattleState) GetWinType() uint8 {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if bs.WinType == 0 {
+		return 1
+	}
+	return bs.WinType
+}
+
+// SurrenderVoteResult holds the outcome of starting or casting a surrender vote.
+type SurrenderVoteResult struct {
+	Started    bool   // vote was started
+	Passed     bool   // vote passed (majority agree)
+	Failed     bool   // vote failed (majority deny or timeout)
+	OnCooldown bool   // vote rejected: cooldown still active
+	AlreadyActive bool // vote rejected: another vote in progress
+	ValidCount uint8  // number of eligible voters
+	VoteSlice  []uint8 // current vote states for each eligible voter
+	TeamIDs    []uint32 // eligible voters
+	Sponsor    uint32   // who started it
+}
+
+const (
+	VoteDurationMS  int64 = 15000 // 15 seconds to vote
+	VoteCooldownMS  int64 = 60000 // 60 seconds cooldown after failed vote
+)
+
+// StartSurrenderVote initiates a surrender vote. Returns result.
+func (bs *BattleState) StartSurrenderVote(sponsorID uint32, teamIDs []uint32, nowMS int64) SurrenderVoteResult {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if bs.Finished {
+		return SurrenderVoteResult{}
+	}
+	if bs.VoteActive {
+		return SurrenderVoteResult{AlreadyActive: true}
+	}
+	if nowMS < bs.VoteCooldownAt {
+		return SurrenderVoteResult{OnCooldown: true}
+	}
+
+	bs.VoteActive = true
+	bs.VoteSponsor = sponsorID
+	bs.VoteEndAt = nowMS + VoteDurationMS
+	bs.VoteResults = make(map[uint32]uint8)
+	bs.VoteTeamIDs = teamIDs
+	for _, id := range teamIDs {
+		bs.VoteResults[id] = 0 // not voted
+	}
+	// Sponsor auto-agrees
+	bs.VoteResults[sponsorID] = 2
+
+	validCount := uint8(len(teamIDs))
+	votes := bs.voteSliceLocked()
+
+	return SurrenderVoteResult{
+		Started:    true,
+		ValidCount: validCount,
+		VoteSlice:  votes,
+		TeamIDs:    teamIDs,
+		Sponsor:    sponsorID,
+	}
+}
+
+// CastSurrenderVote records a vote (1=deny, 2=agree). Returns updated result.
+func (bs *BattleState) CastSurrenderVote(charID uint32, agree bool, nowMS int64) SurrenderVoteResult {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if !bs.VoteActive || bs.Finished {
+		return SurrenderVoteResult{}
+	}
+	if _, ok := bs.VoteResults[charID]; !ok {
+		return SurrenderVoteResult{} // not eligible
+	}
+
+	if agree {
+		bs.VoteResults[charID] = 2
+	} else {
+		bs.VoteResults[charID] = 1
+	}
+
+	validCount := uint8(len(bs.VoteTeamIDs))
+	votes := bs.voteSliceLocked()
+
+	// Check if vote resolved
+	agrees := 0
+	denies := 0
+	for _, v := range bs.VoteResults {
+		if v == 2 {
+			agrees++
+		} else if v == 1 {
+			denies++
+		}
+	}
+
+	total := len(bs.VoteTeamIDs)
+	majority := total/2 + 1
+
+	result := SurrenderVoteResult{
+		ValidCount: validCount,
+		VoteSlice:  votes,
+		TeamIDs:    bs.VoteTeamIDs,
+		Sponsor:    bs.VoteSponsor,
+	}
+
+	if agrees >= majority {
+		result.Passed = true
+		bs.VoteActive = false
+	} else if denies >= majority || (denies > 0 && agrees+denies >= total) {
+		result.Failed = true
+		bs.VoteActive = false
+		bs.VoteCooldownAt = nowMS + VoteCooldownMS
+	}
+
+	return result
+}
+
+// CheckVoteTimeout checks if the active vote has timed out. Returns result if it did.
+func (bs *BattleState) CheckVoteTimeout(nowMS int64) (SurrenderVoteResult, bool) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if !bs.VoteActive || nowMS < bs.VoteEndAt {
+		return SurrenderVoteResult{}, false
+	}
+
+	// Vote timed out — count non-voters as denies
+	bs.VoteActive = false
+	bs.VoteCooldownAt = nowMS + VoteCooldownMS
+
+	votes := bs.voteSliceLocked()
+	agrees := 0
+	total := len(bs.VoteTeamIDs)
+	for _, v := range bs.VoteResults {
+		if v == 2 {
+			agrees++
+		}
+	}
+
+	majority := total/2 + 1
+	result := SurrenderVoteResult{
+		ValidCount: uint8(len(bs.VoteTeamIDs)),
+		VoteSlice:  votes,
+		TeamIDs:    bs.VoteTeamIDs,
+		Sponsor:    bs.VoteSponsor,
+	}
+
+	if agrees >= majority {
+		result.Passed = true
+	} else {
+		result.Failed = true
+	}
+
+	return result, true
+}
+
+// GetVoteCooldownSeconds returns the cooldown timestamp as seconds since battle start.
+func (bs *BattleState) GetVoteCooldownSeconds(nowMS int64) uint32 {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if bs.VoteCooldownAt <= nowMS {
+		return 0
+	}
+	return uint32((bs.VoteCooldownAt - bs.StartTime) / 1000)
+}
+
+// GetBattleSeconds returns a unix-ms timestamp as seconds since battle start.
+func (bs *BattleState) GetBattleSeconds(ms int64) uint32 {
+	return uint32((ms - bs.StartTime) / 1000)
+}
+
+// voteSliceLocked returns the vote states in order (must hold bs.mu).
+func (bs *BattleState) voteSliceLocked() []uint8 {
+	result := make([]uint8, len(bs.VoteTeamIDs))
+	for i, id := range bs.VoteTeamIDs {
+		result[i] = bs.VoteResults[id]
+	}
+	return result
+}
+
 // StopCh returns the stop channel for select.
 func (bs *BattleState) StopCh() <-chan struct{} {
 	return bs.stopCh
@@ -486,16 +692,16 @@ type TakeDamageEvent struct {
 
 // TickResult holds events from one tick to be broadcast.
 type TickResult struct {
-	HpChanges     []HpChangeEvent
-	MpChanges     []MpChangeEvent     // for m_mpVec in 1564
-	HpDeltas      []HpDeltaEvent      // for msg 1605 fly text
-	ShieldChanges []ShieldChangeEvent // for m_shieldVec in 1564
-	Deaths        []DeathEvent
-	BlownBullets  []BlownBulletEvent
-	ExpiredIDs    []uint32 // bullet IDs that expired (missed)
-	Respawns      []RespawnEvent
-	NPCDamages    []NPCDamageEvent
-	FlagSnapshot  []FlagWireEvent
+	HpChanges      []HpChangeEvent
+	MpChanges      []MpChangeEvent     // for m_mpVec in 1564
+	HpDeltas       []HpDeltaEvent      // for msg 1605 fly text
+	ShieldChanges  []ShieldChangeEvent // for m_shieldVec in 1564
+	Deaths         []DeathEvent
+	BlownBullets   []BlownBulletEvent
+	ExpiredIDs     []uint32 // bullet IDs that expired (missed)
+	Respawns       []RespawnEvent
+	NPCDamages     []NPCDamageEvent
+	FlagSnapshot   []FlagWireEvent
 	FlagScores     []FlagScoreEvent
 	Buffs          []BuffEvent
 	AttrChanges    []AttrChangeEvent // for msg 1560 speed/fire-interval sync
@@ -503,11 +709,11 @@ type TickResult struct {
 	RemovedObjects []uint32          // for msg 1564 m_delVec
 	TurretFires    []TurretFireEvent // for msg 1564 m_fireVec
 	BulletHits     []BulletHitEvent
-	TakeDamages   []TakeDamageEvent
-	GameOver      bool
-	Winner        uint8
-	Scores        [3]int32
-	ElapsedMS     int32
+	TakeDamages    []TakeDamageEvent
+	GameOver       bool
+	Winner         uint8
+	Scores         [3]int32
+	ElapsedMS      int32
 }
 
 // Tick processes one game tick: moves bullets, checks collisions, checks timer.
@@ -588,7 +794,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 		var npcHit *MapNPCHitResult
 		npcFrac := 2.0
 		if bs.NPCs != nil {
-			npcHit, npcFrac = CheckBulletNPCCollisionSegment(bs.NPCs, pxPrev, pyPrev, bx, by, bullet.Camp)
+			npcHit, npcFrac = CheckBulletNPCCollisionSegment(bs.NPCs, pxPrev, pyPrev, bx, by, bullet.Camp, bullet.OwnerID)
 		}
 
 		// Determine what was hit FIRST along the segment
@@ -597,6 +803,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 				BulletID: bulletID,
 			})
 			hitBullets = append(hitBullets, bulletID)
+			expiredIDs = append(expiredIDs, bulletID)
 			continue
 		}
 
@@ -613,6 +820,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 				if immune {
 					result.BlownBullets = append(result.BlownBullets, BlownBulletEvent{BulletID: bulletID})
 					hitBullets = append(hitBullets, bulletID)
+					expiredIDs = append(expiredIDs, bulletID)
 					continue
 				}
 				result.TakeDamages = append(result.TakeDamages, TakeDamageEvent{
@@ -651,6 +859,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 				if attacker, ok := bs.States[bullet.OwnerID]; ok {
 					attacker.DamageOut += totalDmg
 				}
+				state.DamageIn += shieldAbsorbed + damage
 
 				result.HpChanges = append(result.HpChanges, HpChangeEvent{
 					ObjID: memberID,
@@ -729,6 +938,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 				}
 
 				hitBullets = append(hitBullets, bulletID)
+				expiredIDs = append(expiredIDs, bulletID)
 				bulletHitPlayer = true
 			}
 		}
@@ -738,13 +948,18 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 			npc := bs.NPCs[npcHit.NpcID]
 			if npc != nil {
 				var damage int32
+				npcCrit := bullet.Basic && bullet.School != "true" && rand.Float64() < 0.15
 				if npc.Type == 3 || npc.Type == 4 || npc.Type == 6 {
 					// Base (3), Turret (4), or Repair Box (6): real attack damage
 					mult := bullet.DamageMult
 					if mult <= 0 {
 						mult = 1.0
 					}
-					damage = int32(bullet.Power * mult)
+					dmgF := bullet.Power * mult
+					if npcCrit {
+						dmgF *= 2
+					}
+					damage = int32(dmgF)
 				} else {
 					// Ordinary destructible obstacle: max_hp / 4 per hit
 					damage = npc.MaxHP / 4
@@ -761,10 +976,22 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 					ObjID: npc.ID,
 					HP:    npc.HP,
 				})
+				// Fly text damage number on NPC — skip destructible items (type 1)
+				if npc.Type != 1 && npc.Type != 6 {
+					result.HpDeltas = append(result.HpDeltas, HpDeltaEvent{
+						ObjID:    npc.ID,
+						Delta:    -damage,
+						Crit:     npcCrit,
+						CasterID: bullet.OwnerID,
+					})
+				}
 				result.BlownBullets = append(result.BlownBullets, BlownBulletEvent{
 					BulletID: bulletID,
 				})
+				hitBullets = append(hitBullets, bulletID)
+				expiredIDs = append(expiredIDs, bulletID)
 				if !npc.Alive {
+					result.RemovedObjects = append(result.RemovedObjects, npc.ID)
 					if npc.Type == 1 {
 						bs.SpawnDropAtLocked(npc.X, npc.Y, 0.30, &result)
 					}
@@ -793,7 +1020,6 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 						result.ElapsedMS = int32(now - bs.StartTime)
 					}
 				}
-				hitBullets = append(hitBullets, bulletID)
 			}
 		} else if !bulletHitPlayer && expired {
 			if bullet.HitsWall {
@@ -801,6 +1027,7 @@ func (bs *BattleState) Tick(positions map[uint32]*MemberPos) TickResult {
 					BulletID: bulletID,
 				})
 				hitBullets = append(hitBullets, bulletID)
+				expiredIDs = append(expiredIDs, bulletID)
 			} else {
 				expiredIDs = append(expiredIDs, bulletID)
 			}

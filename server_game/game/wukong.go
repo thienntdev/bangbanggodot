@@ -1,7 +1,6 @@
 package game
 
 import (
-	"math"
 	"time"
 )
 
@@ -49,8 +48,8 @@ func (w *WukongBehavior) empower(actorID uint32) ([]BuffEvent, []SlotSwapEvent, 
 		{
 			DelayMS: 3000,
 			Run: func() ActionResult {
-				if !w.empowered || time.Now().UnixMilli() < w.empoweredUntil {
-					return ActionResult{}
+				if !w.empowered {
+					return ActionResult{} // already consumed by empowered attack
 				}
 				b, sw := w.consumeEmpower(actorID)
 				return ActionResult{Buffs: b, SlotSwaps: sw}
@@ -151,15 +150,8 @@ func (w *WukongBehavior) OnUseSkill(ctx *ActorContext, slotNo uint8, targetID ui
 
 	case 1:
 		// E (310201): Dash forward 384px at speed 960 + 50% dmg reduction (2s) + 1s counter-shield + empower
-		dashX, dashY := ProjectDest(ctx.PosX, ctx.PosY, destX, destY, 384)
-		dashX, dashY = ClampToArena(dashX, dashY)
-		if len(ctx.Walls) > 0 {
-			if hit, frac := SegmentHitsWall(ctx.Walls, float64(ctx.PosX), float64(ctx.PosY), float64(dashX), float64(dashY)); hit {
-				safeFrac := math.Max(0, frac-0.05)
-				dashX = ctx.PosX + int16(math.Round(float64(dashX-ctx.PosX)*safeFrac))
-				dashY = ctx.PosY + int16(math.Round(float64(dashY-ctx.PosY)*safeFrac))
-			}
-		}
+		intendedX, intendedY := Aimed(ctx.PosX, ctx.PosY, destX, destY, 384, true)
+		dashX, dashY := ClearTankLanding(ctx.Walls, ctx.PosX, ctx.PosY, intendedX, intendedY, ctx.Bounds)
 		buffs, swaps, expDelayed := w.empower(ctx.ActorID)
 		buffs = append(buffs,
 			BuffEvent{TargetID: ctx.ActorID, TemplateID: 310202, InstID: 310202, Stacks: 1, DurationMS: 2000},
@@ -192,24 +184,18 @@ func (w *WukongBehavior) OnUseSkill(ctx *ActorContext, slotNo uint8, targetID ui
 		}
 
 	case 2:
-		// Space (310301): Blink 264px + vanish buff (310302, immune 700ms) + scene objects → 700ms later land & empower
+		// Space (310301): Blink up to 264px + vanish buff (310302, immune 700ms) + scene objects → 700ms later land & empower
+		// Matches Python melee_common.aimed (fixed=false) & clear_tank_landing
 		startX, startY := ctx.PosX, ctx.PosY
-		blinkX, blinkY := ProjectDest(startX, startY, destX, destY, 264)
-		blinkX, blinkY = ClampToArena(blinkX, blinkY)
-		if len(ctx.Walls) > 0 {
-			if hit, frac := SegmentHitsWall(ctx.Walls, float64(startX), float64(startY), float64(blinkX), float64(blinkY)); hit {
-				safeFrac := math.Max(0, frac-0.05)
-				blinkX = startX + int16(math.Round(float64(blinkX-startX)*safeFrac))
-				blinkY = startY + int16(math.Round(float64(blinkY-startY)*safeFrac))
-			}
-		}
+		intendedX, intendedY := Aimed(startX, startY, destX, destY, 264, false)
+		blinkX, blinkY := ClearTankLanding(ctx.Walls, startX, startY, intendedX, intendedY, ctx.Bounds)
 		actorID := ctx.ActorID
 		camp := ctx.Camp
 		w.lockedUntil = now + 700
 		return ActionResult{
 			ImmuneMS: 700,
 			Moves: []MoveEvent{
-				{DestX: blinkX, DestY: blinkY, Speed: 1200, MoveType: 3},
+				{DestX: blinkX, DestY: blinkY, Speed: 0, MoveType: 5},
 			},
 			Objects: []ObjectEvent{
 				{Template: 310302, PosX: startX, PosY: startY, Camp: camp, OwnerID: actorID, LifeMS: 360},

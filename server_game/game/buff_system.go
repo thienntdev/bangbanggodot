@@ -181,10 +181,9 @@ func (bs *BattleState) ApplyBuff(ev BuffEvent, casterID uint32, nowMS int64) (bo
 }
 
 func hasActiveEffectLocked(s *MemberState, effectType int32, nowMS int64) bool {
-	for id, b := range s.ActiveBuffs {
+	for _, b := range s.ActiveBuffs {
 		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
-			delete(s.ActiveBuffs, id)
-			continue
+			continue // expired — skip but don't delete; tickBuffs handles removal + client notification
 		}
 		if b.EffectType == effectType {
 			return true
@@ -201,10 +200,9 @@ func (bs *BattleState) CanMove(charID uint32, nowMS int64) bool {
 	if !ok || s.ActiveBuffs == nil {
 		return true
 	}
-	for id, b := range s.ActiveBuffs {
+	for _, b := range s.ActiveBuffs {
 		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
-			delete(s.ActiveBuffs, id)
-			continue
+			continue // expired — skip but don't delete; tickBuffs handles removal + client notification
 		}
 		if b.EffectType == BuffEffectStun || b.EffectType == BuffEffectRoot {
 			return false
@@ -234,10 +232,9 @@ func (bs *BattleState) CanCastSlot(charID uint32, slotNo uint8, nowMS int64) boo
 	case 4:
 		mask = 16
 	}
-	for id, b := range s.ActiveBuffs {
+	for _, b := range s.ActiveBuffs {
 		if b.ExpiresAt > 0 && nowMS >= b.ExpiresAt {
-			delete(s.ActiveBuffs, id)
-			continue
+			continue // expired — skip but don't delete; tickBuffs handles removal + client notification
 		}
 		switch b.EffectType {
 		case BuffEffectStun:

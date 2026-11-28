@@ -45,12 +45,12 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 		ux, uy = dxAim/aimDist, dyAim/aimDist
 	}
 
-	inShape := func(tx, ty float64) bool {
+	inShape := func(tx, ty, extraRadius float64) bool {
 		dx, dy := tx-sx, ty-sy
 		switch ev.Shape {
 		case "cone":
 			dist := math.Hypot(dx, dy)
-			if dist > ev.Radius+HitboxRadius {
+			if dist > ev.Radius+extraRadius {
 				return false
 			}
 			if dist == 0 {
@@ -64,9 +64,9 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 			side := -dx*uy + dy*ux
 			outX := math.Max(0, math.Max(-along, along-ev.Radius))
 			outY := math.Max(0, math.Abs(side)-ev.HalfWidth)
-			return math.Hypot(outX, outY) <= HitboxRadius
+			return math.Hypot(outX, outY) <= extraRadius
 		default: // "circle"
-			return math.Hypot(dx, dy) <= ev.Radius+HitboxRadius
+			return math.Hypot(dx, dy) <= ev.Radius+extraRadius
 		}
 	}
 
@@ -78,7 +78,7 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 			continue
 		}
 		pos := positions[memberID]
-		if pos == nil || !inShape(float64(pos.X), float64(pos.Y)) {
+		if pos == nil || !inShape(float64(pos.X), float64(pos.Y), HitboxRadius) {
 			continue
 		}
 		hitPlayers = append(hitPlayers, memberID)
@@ -164,6 +164,7 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 		if hasAttacker {
 			attacker.DamageOut += shieldAbsorbed + hpLoss
 		}
+		state.DamageIn += shieldAbsorbed + hpLoss
 		if ev.Lifesteal > 0 && hpLoss > 0 {
 			totalLifesteal += float64(hpLoss) * ev.Lifesteal
 		}
@@ -224,16 +225,30 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 	}
 
 	// 2. Check destructible NPCs
+	npcCrit := ev.ForceCrit || (ev.Basic && ev.School != "true" && rand.Float64() < 0.15)
+	npcRaw := raw
+	if npcCrit {
+		npcRaw *= 2
+	}
 	for npcID, npc := range bs.NPCs {
-		if !npc.Alive || npc.Camp == ownerCamp {
+		if !npc.Alive || (npc.Camp != 0 && npc.Camp == ownerCamp) {
 			continue
 		}
-		if !inShape(float64(npc.X), float64(npc.Y)) {
+		halfW := float64(npc.Width) / 2.0
+		if halfW <= 0 {
+			halfW = 36
+		}
+		halfH := float64(npc.Height) / 2.0
+		if halfH <= 0 {
+			halfH = 36
+		}
+		npcRadius := math.Max(halfW, halfH)
+		if !inShape(float64(npc.X), float64(npc.Y), npcRadius) {
 			continue
 		}
 		var npcDmg int32
 		if npc.Type == 3 || npc.Type == 4 || npc.Type == 6 {
-			npcDmg = int32(raw)
+			npcDmg = int32(npcRaw)
 		} else {
 			npcDmg = npc.MaxHP / 4
 		}
@@ -241,18 +256,35 @@ func (bs *BattleState) ApplyAreaHit(ownerID uint32, ownerCamp uint8, ev AreaHitE
 			npcDmg = 1
 		}
 		npc.HP -= npcDmg
-		if npc.HP < 0 {
+		if npc.HP <= 0 {
 			npc.HP = 0
+			npc.Alive = false
+		}
+		result.HpChanges = append(result.HpChanges, HpChangeEvent{
+			ObjID: npc.ID,
+			HP:    npc.HP,
+		})
+		// Fly text for base/turret/repair box — skip destructible items (type 1)
+		if npc.Type != 1 && npc.Type != 6 {
+			result.HpDeltas = append(result.HpDeltas, HpDeltaEvent{
+				ObjID:    npc.ID,
+				Delta:    -npcDmg,
+				Crit:     npcCrit,
+				CasterID: ownerID,
+			})
 		}
 		result.NPCDamages = append(result.NPCDamages, NPCDamageEvent{
 			NpcID: npcID,
 			HP:    npc.HP,
-			Dead:  npc.HP <= 0,
+			Dead:  !npc.Alive,
 			X:     npc.X,
 			Y:     npc.Y,
 		})
-		if npc.HP <= 0 {
-			npc.Alive = false
+		if !npc.Alive {
+			result.RemovedObjects = append(result.RemovedObjects, npc.ID)
+			if npc.Type == 1 {
+				bs.SpawnDropAtLocked(npc.X, npc.Y, 0.30, &result)
+			}
 			if npc.Type == 6 && npc.RepairTarget != 0 {
 				result.Buffs = append(result.Buffs, BuffEvent{
 					Remove: true, TargetID: npc.RepairTarget, InstID: 10,

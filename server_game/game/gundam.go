@@ -1,7 +1,6 @@
 package game
 
 import (
-	"math"
 	"math/rand"
 	"time"
 )
@@ -185,15 +184,8 @@ func (g *GundamBehavior) OnUseSkill(ctx *ActorContext, slotNo uint8, targetID ui
 		}
 		rMult := GetEffectAddVal(302911, 1.22)
 		shotDestX, shotDestY := ProjectDest(ctx.PosX, ctx.PosY, destX, destY, shotRange)
-		recoilX, recoilY := ProjectDest(ctx.PosX, ctx.PosY, destX, destY, -recoilDist)
-		recoilX, recoilY = ClampToArena(recoilX, recoilY)
-		if len(ctx.Walls) > 0 {
-			if hit, frac := SegmentHitsWall(ctx.Walls, float64(ctx.PosX), float64(ctx.PosY), float64(recoilX), float64(recoilY)); hit {
-				safeFrac := math.Max(0, frac-0.05)
-				recoilX = ctx.PosX + int16(math.Round(float64(recoilX-ctx.PosX)*safeFrac))
-				recoilY = ctx.PosY + int16(math.Round(float64(recoilY-ctx.PosY)*safeFrac))
-			}
-		}
+		recoilIntendedX, recoilIntendedY := ProjectDest(ctx.PosX, ctx.PosY, destX, destY, -recoilDist)
+		recoilX, recoilY := ClearTankLanding(ctx.Walls, ctx.PosX, ctx.PosY, recoilIntendedX, recoilIntendedY, ctx.Bounds)
 		return ActionResult{
 			Fires: []FireEvent{
 				{

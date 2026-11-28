@@ -1,6 +1,9 @@
 package game
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestTurretAIFiresAtNearestEnemy(t *testing.T) {
 	bs := NewBattleState(60000)
@@ -96,8 +99,135 @@ func TestBulletHitsDestructibleNPCEdge(t *testing.T) {
 		1: {ID: 1, X: 200, Y: 100, HP: 100, MaxHP: 100, Camp: 0, Width: 72, Height: 72, Type: 1, Alive: true},
 	}
 	// Bullet aimed at center of NPC (200, 100) from (50, 100)
-	hit, frac := CheckBulletNPCCollisionSegment(npcs, 50, 100, 200, 100, 1)
+	hit, frac := CheckBulletNPCCollisionSegment(npcs, 50, 100, 200, 100, 1, 0) // ownerID=0 → player bullet
 	if hit == nil || hit.NpcID != 1 || frac <= 0 || frac >= 1 {
 		t.Fatalf("expected NPC hit along segment, got hit=%v frac=%v", hit, frac)
+	}
+}
+
+func TestAreaHitsDestructibleNPCAndRemovesOnDeath(t *testing.T) {
+	bs := NewBattleState(60000)
+	bs.AddMember(1, 1000, 1, 10000036, 100, 100)
+	bs.NPCs = map[uint32]*MapNPC{
+		234881024: {
+			ID:       234881024,
+			Template: 2003,
+			X:        160,
+			Y:        100,
+			HP:       50,
+			MaxHP:    100,
+			Camp:     0,
+			Width:    72,
+			Height:   72,
+			Type:     1,
+			Alive:    true,
+		},
+	}
+	positions := map[uint32]*MemberPos{
+		1: {X: 100, Y: 100},
+	}
+
+	// 1. Wukong cone empowered attack hitting the box
+	res, _ := bs.ApplyAreaHit(1, 1, AreaHitEvent{
+		Shape:      "cone",
+		Template:   310121,
+		StartX:     100,
+		StartY:     100,
+		DestX:      200,
+		DestY:      100,
+		Radius:     192,
+		AngleDeg:   180,
+		DamageMult: 1.0,
+	}, positions, 1000)
+
+	npc := bs.NPCs[234881024]
+	if len(res.HpChanges) != 1 || res.HpChanges[0].ObjID != 234881024 {
+		t.Fatalf("expected HpChanges for NPC, got %+v", res.HpChanges)
+	}
+	if npc.HP != 25 {
+		t.Fatalf("expected NPC HP 25 (50 - 100/4), got %d", npc.HP)
+	}
+
+	// 2. Second hit destroys the box
+	res2, _ := bs.ApplyAreaHit(1, 1, AreaHitEvent{
+		Shape:      "circle",
+		Template:   310401,
+		StartX:     100,
+		StartY:     100,
+		DestX:      100,
+		DestY:      100,
+		Radius:     216,
+		DamageMult: 1.0,
+	}, positions, 2000)
+
+	if npc.Alive {
+		t.Fatalf("expected NPC to be destroyed")
+	}
+	if len(res2.RemovedObjects) != 1 || res2.RemovedObjects[0] != 234881024 {
+		t.Fatalf("expected RemovedObjects to contain 234881024, got %+v", res2.RemovedObjects)
+	}
+}
+
+func TestBulletTickHitsDestructibleNPCAndDeductsHP(t *testing.T) {
+	bs := NewBattleState(60000)
+	bs.AddMember(1, 1000, 1, 10000036, 100, 100)
+	bs.NPCs = map[uint32]*MapNPC{
+		234881024: {
+			ID:       234881024,
+			Template: 2003,
+			X:        300,
+			Y:        100,
+			HP:       100,
+			MaxHP:    100,
+			Camp:     0,
+			Width:    72,
+			Height:   72,
+			Type:     1,
+			Alive:    true,
+		},
+	}
+	positions := map[uint32]*MemberPos{
+		1: {X: 100, Y: 100},
+	}
+
+	now := time.Now().UnixMilli()
+	bs.StartTime = now - 220
+	bs.Deadline = now + 60000
+
+	// Bullet flies from 100 to 500 at speed 1000 px/s (takes 400ms)
+	// Started 220ms ago, so at Tick (now) bullet has traveled 220px to X=320 (penetrating box at X=300)
+	bs.AddBullet(&BulletFlight{
+		ID:        999,
+		OwnerID:   1,
+		Camp:      1,
+		Template:  310101,
+		StartX:    100,
+		StartY:    100,
+		DestX:     500,
+		DestY:     100,
+		Speed:     1000,
+		StartTime: now - 220,
+		LifeMS:    400,
+		Power:     100,
+		HitsWall:  false,
+	})
+
+	res := bs.Tick(positions)
+
+	npc := bs.NPCs[234881024]
+	if npc.HP != 75 {
+		t.Fatalf("expected NPC HP 75 (100 - 100/4), got %d", npc.HP)
+	}
+	if len(res.HpChanges) != 1 || res.HpChanges[0].ObjID != 234881024 || res.HpChanges[0].HP != 75 {
+		t.Fatalf("expected HpChanges for NPC with HP=75, got %+v", res.HpChanges)
+	}
+	if len(res.BlownBullets) != 1 || res.BlownBullets[0].BulletID != 999 {
+		t.Fatalf("expected BlownBullets to contain bullet 999, got %+v", res.BlownBullets)
+	}
+	if len(res.ExpiredIDs) != 1 || res.ExpiredIDs[0] != 999 {
+		t.Fatalf("expected ExpiredIDs (m_overVec) to contain bullet 999, got %+v", res.ExpiredIDs)
+	}
+	if _, ok := bs.Bullets[999]; ok {
+		t.Fatalf("expected bullet 999 to be removed from bs.Bullets")
 	}
 }

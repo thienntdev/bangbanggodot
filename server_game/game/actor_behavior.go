@@ -144,6 +144,7 @@ type ActorContext struct {
 	TargetY int16
 	Config  *TankConfig
 	Walls   []WallRect
+	Bounds  ArenaBounds
 }
 
 // ActorBehavior defines lifecycle and combat hooks for any battle entity (Tank, Mob, Boss).
@@ -336,16 +337,172 @@ func ClampDest(startX, startY, destX, destY, maxRange int16) (int16, int16) {
 }
 
 // ClampToArena keeps coordinates inside safe playable arena bounds.
-func ClampToArena(x, y int16) (int16, int16) {
-	if x < 40 {
-		x = 40
-	} else if x > 1560 {
-		x = 1560
+// Uses dynamic bounds from map data (matches Python clamp_tank_position).
+func ClampToArena(x, y int16, b ArenaBounds) (int16, int16) {
+	if x < b.Left {
+		x = b.Left
+	} else if x > b.Right {
+		x = b.Right
 	}
-	if y < 40 {
-		y = 40
-	} else if y > 920 {
-		y = 920
+	if y < b.Top {
+		y = b.Top
+	} else if y > b.Bottom {
+		y = b.Bottom
 	}
 	return x, y
+}
+
+// Aimed computes the destination point along the ray from (startX, startY) towards (destX, destY).
+// If fixed is true, the travel distance is exactly distance (like dash/fixed-range skills).
+// If fixed is false, the travel distance is min(actualDistance, distance) (like blink skills).
+// Matches Python melee_common.aimed.
+func Aimed(startX, startY, destX, destY int16, distance int16, fixed bool) (int16, int16) {
+	dx := float64(destX - startX)
+	dy := float64(destY - startY)
+	length := math.Hypot(dx, dy)
+	if length == 0 {
+		return startX, startY
+	}
+	var frac float64
+	if fixed {
+		frac = float64(distance) / length
+	} else {
+		frac = math.Min(1.0, float64(distance)/length)
+	}
+	return startX + int16(math.Round(dx*frac)), startY + int16(math.Round(dy*frac))
+}
+
+const TankMoveHalf = 36.0
+
+// RectContactSingle computes the swept collision fraction t in [0, 1] of a moving point (x1,y1)->(x2,y2)
+// against an axis-aligned rectangle padded by padding on all sides.
+// Matches Python combat_geometry.rect_contact.
+func RectContactSingle(w WallRect, x1, y1, x2, y2, padding float64) (bool, float64) {
+	dx := x2 - x1
+	dy := y2 - y1
+	low, high := 0.0, 1.0
+
+	pLeft := w.Left - padding
+	pRight := w.Right + padding
+	pTop := w.Top - padding
+	pBottom := w.Bottom + padding
+
+	if dx == 0 {
+		if x1 < pLeft || x1 > pRight {
+			return false, 1.0
+		}
+	} else {
+		t1 := (pLeft - x1) / dx
+		t2 := (pRight - x1) / dx
+		if t1 > t2 {
+			t1, t2 = t2, t1
+		}
+		if t1 > low {
+			low = t1
+		}
+		if t2 < high {
+			high = t2
+		}
+		if low > high {
+			return false, 1.0
+		}
+	}
+
+	if dy == 0 {
+		if y1 < pTop || y1 > pBottom {
+			return false, 1.0
+		}
+	} else {
+		t1 := (pTop - y1) / dy
+		t2 := (pBottom - y1) / dy
+		if t1 > t2 {
+			t1, t2 = t2, t1
+		}
+		if t1 > low {
+			low = t1
+		}
+		if t2 < high {
+			high = t2
+		}
+		if low > high {
+			return false, 1.0
+		}
+	}
+
+	return true, low
+}
+
+// ClearTankLanding calculates the legal landing position for dashes and blinks (e.g. Wukong E, Space, Gundam R recoil).
+// Matches Python combat_geometry.clear_tank_landing & battle_map.py.
+// Tanks CAN cross inner walls, provided their 72px body (36px half-width) can legally land on open ground.
+// If the destination overlaps a wall, it backtracks along the ray to the wall's front edge.
+func ClearTankLanding(walls []WallRect, startX, startY, destX, destY int16, bounds ArenaBounds) (int16, int16) {
+	destX, destY = ClampToArena(destX, destY, bounds)
+	curX := float64(destX)
+	curY := float64(destY)
+	sX := float64(startX)
+	sY := float64(startY)
+
+	if len(walls) == 0 {
+		return destX, destY
+	}
+
+	maxIter := len(walls) + 2
+	if maxIter > 32 {
+		maxIter = 32
+	}
+
+	for iter := 0; iter < maxIter; iter++ {
+		var blocked []WallRect
+		for _, w := range walls {
+			pLeft := w.Left - (TankMoveHalf - 0.001)
+			pRight := w.Right + (TankMoveHalf - 0.001)
+			pTop := w.Top - (TankMoveHalf - 0.001)
+			pBottom := w.Bottom + (TankMoveHalf - 0.001)
+			if curX >= pLeft && curX <= pRight && curY >= pTop && curY <= pBottom {
+				blocked = append(blocked, w)
+			}
+		}
+
+		if len(blocked) == 0 {
+			return int16(math.Round(curX)), int16(math.Round(curY))
+		}
+
+		minFrac := 2.0
+		hitAny := false
+		for _, w := range blocked {
+			hit, frac := RectContactSingle(w, sX, sY, curX, curY, TankMoveHalf)
+			if hit && frac >= 0 {
+				hitAny = true
+				if frac < minFrac {
+					minFrac = frac
+				}
+			}
+		}
+
+		if !hitAny || minFrac <= 0 {
+			return startX, startY
+		}
+
+		edgeX := sX + (curX-sX)*minFrac
+		edgeY := sY + (curY-sY)*minFrac
+
+		if curX > sX {
+			curX = math.Floor(edgeX)
+		} else if curX < sX {
+			curX = math.Ceil(edgeX)
+		} else {
+			curX = math.Round(edgeX)
+		}
+
+		if curY > sY {
+			curY = math.Floor(edgeY)
+		} else if curY < sY {
+			curY = math.Ceil(edgeY)
+		} else {
+			curY = math.Round(edgeY)
+		}
+	}
+
+	return startX, startY
 }
